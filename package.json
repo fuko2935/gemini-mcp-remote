@@ -1,0 +1,121 @@
+{
+  "name": "gemini-mcp-server",
+  "version": "1.0.0",
+  "description": "Gemini-powered MCP Server for comprehensive codebase analysis. Analyze any project with Gemini 2.0 Flash AI - get architecture insights, bug detection, code quality reviews, and answers to specific questions about your codebase.",
+  "main": "dist/simple-server.js",
+  "module": "./src/simple-server.ts",
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "gemini-mcp-server": "dist/simple-server.js"
+  },
+  "exports": "./dist/simple-server.js",
+  "types": "dist/simple-server.d.ts",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cyanheads/mcp-ts-template.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cyanheads/mcp-ts-template/issues"
+  },
+  "homepage": "https://github.com/cyanheads/mcp-ts-template#readme",
+  "scripts": {
+    "build": "tsc && chmod +x dist/simple-server.js",
+    "start": "node dist/simple-server.js",
+    "start:stdio": "node dist/simple-server.js",
+    "start:http": "node dist/simple-server.js",
+    "start:agent": "MCP_LOG_LEVEL=debug node dist/agent/cli/boot.js",
+    "rebuild": "ts-node --esm scripts/clean.ts && npm run build",
+    "docs:generate": "typedoc --tsconfig ./tsconfig.typedoc.json",
+    "depcheck": "npx depcheck",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "tree": "ts-node --esm scripts/tree.ts",
+    "fetch-spec": "ts-node --esm scripts/fetch-openapi-spec.ts",
+    "format": "prettier --write \"**/*.{ts,js,json,md,html,css}\"",
+    "inspector": "npx mcp-inspector --config mcp.json --server mcp-ts-template",
+    "db:duckdb-example": "MCP_LOG_LEVEL=debug tsc && node dist/storage/duckdbExample.js"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "^1.3.1-alpha.23",
+    "@google/generative-ai": "^0.24.1",
+    "@hono/node-server": "^1.15.0",
+    "@modelcontextprotocol/sdk": "^1.15.0",
+    "@supabase/supabase-js": "^2.50.3",
+    "@types/node": "^24.0.10",
+    "@types/sanitize-html": "^2.16.0",
+    "@types/validator": "13.15.2",
+    "chrono-node": "^2.8.0",
+    "dotenv": "^16.6.1",
+    "eslint": "^9.30.1",
+    "glob": "^11.0.3",
+    "hono": "^4.8.4",
+    "ignore": "^7.0.5",
+    "jose": "^6.0.11",
+    "js-yaml": "^4.1.0",
+    "node-cron": "^4.2.0",
+    "openai": "^5.8.2",
+    "partial-json": "^0.1.7",
+    "sanitize-html": "^2.17.0",
+    "tiktoken": "^1.0.21",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.35.1",
+    "validator": "13.15.15",
+    "winston": "^3.17.0",
+    "winston-transport": "^4.9.0",
+    "zod": "^3.25.74",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "keywords": [
+    "typescript",
+    "template",
+    "mcp",
+    "model-context-protocol",
+    "agent",
+    "autonomous-agent",
+    "agent-framework",
+    "architecture",
+    "error-handling",
+    "llm",
+    "ai-integration",
+    "mcp-server",
+    "mcp-client",
+    "hono",
+    "stdio",
+    "http",
+    "authentication",
+    "oauth",
+    "jwt",
+    "openrouter",
+    "duckdb",
+    "zod"
+  ],
+  "author": "cyanheads <casey@caseyjhand.com> (https://github.com/cyanheads/mcp-ts-template#readme)",
+  "license": "Apache-2.0",
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/cyanheads"
+    },
+    {
+      "type": "buy_me_a_coffee",
+      "url": "https://www.buymeacoffee.com/cyanheads"
+    }
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.1",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node-cron": "^3.0.11",
+    "axios": "^1.10.0",
+    "depcheck": "^1.4.7",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "typedoc": "^0.28.7"
+  }
+}

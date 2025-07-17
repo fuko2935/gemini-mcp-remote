@@ -1,0 +1,26 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - geminiApiKeys
+    properties:
+      geminiApiKeys:
+        type: string
+        description: "Your Gemini API keys from Google AI Studio. You can enter multiple keys separated by commas for automatic rotation (e.g., 'key1,key2,key3'). Get yours at: https://makersuite.google.com/app/apikey"
+      logsPath:
+        type: string
+        description: "The absolute path inside the container for log files. Default: /app/logs"
+        default: "/app/logs"
+  exampleConfig:
+    geminiApiKeys: "your-api-key-here,your-second-key,your-third-key"
+    logsPath: "/app/logs"
+  commandFunction: |-
+    (config) => ({
+      command: 'node',
+      args: ['dist/simple-server.js'],
+      env: {
+        GEMINI_API_KEY: config.geminiApiKeys,
+        LOGS_DIR: config.logsPath || '/app/logs'
+      }
+    })
