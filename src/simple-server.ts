@@ -19,6 +19,10 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import winston from "winston";
 import { readdirSync, statSync } from "fs";
+// YENİ EKLENECEK IMPORT'LAR
+import { SetRepositoryInputSchema } from "./mcp-server/tools/workspaceSetter/index.js";
+import { TokenCalculatorInputSchema } from "./mcp-server/tools/tokenCalculator/index.js";
+import { workspaceManager } from "./mcp-server/workspaceManager.js";
 
 // Initialize logging system
 const logsDir = path.join(process.cwd(), "logs");
@@ -755,6 +759,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description:
           "🎭 PROJECT ORCHESTRATOR ANALYZE - **STEP 2 of 2** Analyze each file group and combine results! Use the groups data from 'project_orchestrator_create' to perform comprehensive analysis of massive codebases without timeout issues.",
         inputSchema: zodToJsonSchema(ProjectOrchestratorAnalyzeSchema),
+      },
+      // YENİ EKLENECEK ARAÇ TANIMLARI
+      {
+        name: "set_repository",
+        description: "Sets the active repository for analysis by cloning it from a given URL.",
+        inputSchema: zodToJsonSchema(SetRepositoryInputSchema),
+      },
+      {
+        name: "token_calculator",
+        description: "Calculates the estimated token count for a given text.",
+        inputSchema: zodToJsonSchema(TokenCalculatorInputSchema),
       },
     ],
   };
@@ -2619,6 +2634,38 @@ ${groups.map((group, index) => `- **Group ${index + 1}${group.name ? ` (${group.
 *Error occurred during: ${error.message.includes("ENOENT") ? "Path validation" : error.message.includes("API key") ? "API key validation" : error.message.includes("JSON") ? "Groups data parsing" : "Orchestrator analysis"}*`,
             },
           ],
+          isError: true,
+        };
+      }
+
+    // YENİ EKLENECEK CASE BLOKLARI
+    case "set_repository":
+      try {
+        const params = SetRepositoryInputSchema.parse(request.params.arguments);
+        const result = await workspaceManager.setRepository(params.repoUrl);
+        return {
+          content: [{ type: "text", text: `Repository set to: ${result.path}` }],
+          isError: false,
+        };
+      } catch (error: any) {
+        return {
+          content: [{ type: "text", text: `Error setting repository: ${error.message}` }],
+          isError: true,
+        };
+      }
+
+    case "token_calculator":
+      try {
+        const params = TokenCalculatorInputSchema.parse(request.params.arguments);
+        // 'calculateTokens' fonksiyonu bu dosyada zaten mevcut, onu kullanıyoruz.
+        const tokenCount = calculateTokens(params.text);
+        return {
+          content: [{ type: "text", text: `Estimated token count: ${tokenCount}` }],
+          isError: false,
+        };
+      } catch (error: any) {
+        return {
+          content: [{ type: "text", text: `Error calculating tokens: ${error.message}` }],
           isError: true,
         };
       }
