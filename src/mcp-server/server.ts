@@ -25,7 +25,7 @@ import { registerEchoTool } from "./tools/echoTool/index.js";
 import { registerFetchImageTestTool } from "./tools/imageTest/index.js";
 import { registerGeminiCodebaseAnalyzer } from "./tools/geminiCodebaseAnalyzer/index.js";
 import { registerSetRepositoryTool } from "./tools/workspaceSetter/index.js";
-import { registerGetTokenUsageTool } from "./tools/tokenCalculator/index.js";
+import { registerTokenCalculatorTool } from "./tools/tokenCalculator/index.js";
 import { startHttpTransport } from "./transports/httpTransport.js";
 import { connectStdioTransport } from "./transports/stdioTransport.js";
 
@@ -67,8 +67,8 @@ async function createMcpServerInstance(): Promise<McpServer> {
       await registerCatFactFetcherTool(server);
       await registerFetchImageTestTool(server);
       await registerGeminiCodebaseAnalyzer(server);
-      await registerSetRepositoryTool(server);
-      await registerGetTokenUsageTool(server);
+      registerSetRepositoryTool(server);
+      registerTokenCalculatorTool(server);
       logger.info("Resources and tools registered successfully", context);
     },
     {

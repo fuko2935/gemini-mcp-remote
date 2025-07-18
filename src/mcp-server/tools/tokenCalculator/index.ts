@@ -1,1 +1,1 @@
-export { registerGetTokenUsageTool } from "./registration.js";
+export { registerTokenCalculatorTool } from './registration.js';

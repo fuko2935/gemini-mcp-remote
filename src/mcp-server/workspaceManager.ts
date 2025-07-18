@@ -53,14 +53,11 @@ class WorkspaceManager {
     }
 
     const cloneCommand = `git clone --depth 1 ${cloneUrl} .`;
-    logger.info(`Repo klonlanıyor...`, { ...context, command: cloneCommand });
+    logger.info(`Repo klonlanıyor: ${repoUrl}`, {...context, command: cloneCommand});
     await execPromise(cloneCommand, { cwd: tempDir });
     logger.info(`Repo başarıyla klonlandı: ${tempDir}`, context);
-    this.currentWorkspace = {
-      repoUrl,
-      localPath: tempDir,
-      timestamp: new Date(),
-    };
+    
+    this.currentWorkspace = { repoUrl, localPath: tempDir, timestamp: new Date() };
     return this.currentWorkspace;
   }
 
