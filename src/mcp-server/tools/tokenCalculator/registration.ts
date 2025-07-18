@@ -1,15 +1,21 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { GetTokenUsageInputSchema, getTokenUsageLogic } from "./logic.js";
+import {
+  GetTokenUsageInputSchema,
+  getTokenUsageLogic,
+  GetTokenUsageInput,
+} from "./logic.js";
 import { requestContextService } from "../../../utils/index.js";
 import { ErrorHandler } from "../../../utils/internal/errorHandler.js";
 
-export const registerGetTokenUsageTool = async (server: McpServer): Promise<void> => {
+export const registerGetTokenUsageTool = async (
+  server: McpServer,
+): Promise<void> => {
   server.tool(
     "get_repository_token_usage",
     "📊 Repository Token Usage Analysis - Detailed token analysis and recommendations",
-    zodToJsonSchema(GetTokenUsageInputSchema).properties,
-    async (params) => {
+    GetTokenUsageInputSchema.shape,
+    async (params: GetTokenUsageInput) => {
       const context = requestContextService.createRequestContext({
         operation: "get_repository_token_usage",
         toolName: "get_repository_token_usage",
@@ -18,16 +24,19 @@ export const registerGetTokenUsageTool = async (server: McpServer): Promise<void
 
       try {
         const result = await getTokenUsageLogic(params, context);
-        
+
         // Create detailed breakdown table
         const extensionTable = result.tokenAnalysis.fileBreakdown
-          .map(item => `| ${item.extension} | ${item.count} | ${item.tokens.toLocaleString()} |`)
-          .join('\n');
-        
+          .map(
+            (item) =>
+              `| ${item.extension} | ${item.count} | ${item.tokens.toLocaleString()} |`,
+          )
+          .join("\n");
+
         const largestFilesTable = result.tokenAnalysis.largestFiles
-          .map(item => `| ${item.path} | ${item.tokens.toLocaleString()} |`)
-          .join('\n');
-        
+          .map((item) => `| ${item.path} | ${item.tokens.toLocaleString()} |`)
+          .join("\n");
+
         return {
           content: [
             {
@@ -37,7 +46,7 @@ export const registerGetTokenUsageTool = async (server: McpServer): Promise<void
 ## 🏠 Workspace Bilgileri
 - **Repository:** ${result.workspaceInfo.repoUrl}
 - **Yerel Yol:** ${result.workspaceInfo.localPath}
-- **Analiz Zamanı:** ${new Date(result.workspaceInfo.timestamp).toLocaleString('tr-TR')}
+- **Analiz Zamanı:** ${new Date(result.workspaceInfo.timestamp).toLocaleString("tr-TR")}
 
 ## 📈 Genel İstatistikler
 - **Toplam Dosya Sayısı:** ${result.tokenAnalysis.totalFiles.toLocaleString()}
@@ -61,12 +70,13 @@ ${largestFilesTable}
 **${result.tokenAnalysis.suggestedApproach}**
 
 ## 🛠️ Sonraki Adımlar
-${result.tokenAnalysis.totalTokens < 500000 ? 
-  `1. **Tek Seferde Analiz:** \`gemini_codebase_analyzer\` aracını kullanın
-2. **Hızlı Sorgular:** Sorunuzu doğrudan sorun` :
-  `1. **Grup Oluşturma:** \`project_orchestrator_create\` ile dosyaları gruplandırın
+${
+  result.tokenAnalysis.totalTokens < 500000
+    ? `1. **Tek Seferde Analiz:** \`gemini_codebase_analyzer\` aracını kullanın
+2. **Hızlı Sorgular:** Sorunuzu doğrudan sorun`
+    : `1. **Grup Oluşturma:** \`project_orchestrator_create\` ile dosyaları gruplandırın
 2. **Analiz:** \`project_orchestrator_analyze\` ile her grubu analiz edin
-3. **Token Limiti:** Her grup için ${result.tokenAnalysis.totalTokens > 2000000 ? '200-400K' : '600-800K'} token limitini kullanın`
+3. **Token Limiti:** Her grup için ${result.tokenAnalysis.totalTokens > 2000000 ? "200-400K" : "600-800K"} token limitini kullanın`
 }
 
 ---
@@ -81,7 +91,7 @@ ${result.tokenAnalysis.totalTokens < 500000 ?
           context,
           critical: false,
         });
-        
+
         return {
           content: [
             {
@@ -103,6 +113,6 @@ repoUrl: https://github.com/user/repo.git
           isError: true,
         };
       }
-    }
+    },
   );
 };

@@ -7,7 +7,10 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { promises as fs } from "fs";
 import path from "path";
@@ -15,11 +18,10 @@ import { glob } from "glob";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import winston from "winston";
-import { workspaceManager } from "./mcp-server/workspaceManager.js";
 import { readdirSync, statSync } from "fs";
 
 // Initialize logging system
-const logsDir = path.join(process.cwd(), 'logs');
+const logsDir = path.join(process.cwd(), "logs");
 
 // Ensure logs directory exists
 const initializeLogsDirectory = async () => {
@@ -33,120 +35,151 @@ const initializeLogsDirectory = async () => {
 await initializeLogsDirectory();
 
 const logger = winston.createLogger({
-  level: 'debug',
+  level: "debug",
   format: winston.format.combine(
     winston.format.timestamp(),
-    winston.format.json()
+    winston.format.json(),
   ),
   transports: [
-    new winston.transports.File({ 
-      filename: path.join(logsDir, 'error.log'), 
-      level: 'error' 
+    new winston.transports.File({
+      filename: path.join(logsDir, "error.log"),
+      level: "error",
     }),
-    new winston.transports.File({ 
-      filename: path.join(logsDir, 'activity.log') 
+    new winston.transports.File({
+      filename: path.join(logsDir, "activity.log"),
     }),
   ],
 });
 
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple()
-    )
-  }));
+if (process.env.NODE_ENV !== "production") {
+  logger.add(
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple(),
+      ),
+    }),
+  );
 }
 
 // Security: Restricted paths for safety
 const DANGEROUS_PATHS = [
-  '/etc', '/usr/bin', '/bin', '/sbin', '/boot', '/sys', '/proc',
-  '/mnt/c/Windows', '/mnt/c/Program Files', '/mnt/c/ProgramData',
-  'C:\\Windows', 'C:\\Program Files', 'C:\\ProgramData',
-  '/root', '/var/log', '/var/lib'
+  "/etc",
+  "/usr/bin",
+  "/bin",
+  "/sbin",
+  "/boot",
+  "/sys",
+  "/proc",
+  "/mnt/c/Windows",
+  "/mnt/c/Program Files",
+  "/mnt/c/ProgramData",
+  "C:\\Windows",
+  "C:\\Program Files",
+  "C:\\ProgramData",
+  "/root",
+  "/var/log",
+  "/var/lib",
 ];
 
 const ALLOWED_PATH_PATTERNS = [
   /^\/mnt\/c\/(?:Users|Projects|Development|Dev|Code|Workspace)/i,
   /^\/home\/[^\/]+\/(?:Projects|Development|Dev|Code|Workspace)/i,
-  /^\/mnt\/c\/Projects\/.*/i,  // Allow any subdirectory under /mnt/c/Projects
-  /^\/mnt\/c\/Users\/.*/i,     // Allow any subdirectory under /mnt/c/Users
+  /^\/mnt\/c\/Projects\/.*/i, // Allow any subdirectory under /mnt/c/Projects
+  /^\/mnt\/c\/Users\/.*/i, // Allow any subdirectory under /mnt/c/Users
   /^\/home\/[^\/]+\/(?:Projects|Development|Dev|Code|Workspace)\/.*/i, // Allow subdirectories
-  /^\.{1,2}$/,  // Allow current and parent directory
+  /^\.{1,2}$/, // Allow current and parent directory
   /^\.\//, // Allow relative paths from current directory
 ];
 
 // Cross-platform path normalization with security validation
 function normalizeProjectPath(projectPath: string): string {
   let normalizedPath = projectPath;
-  
+
   // Convert Windows paths to WSL/Unix format
   if (projectPath.match(/^[A-Za-z]:\\/)) {
     const drive = projectPath.charAt(0).toLowerCase();
-    const pathWithoutDrive = projectPath.slice(3).replace(/\\/g, '/');
+    const pathWithoutDrive = projectPath.slice(3).replace(/\\/g, "/");
     normalizedPath = `/mnt/${drive}/${pathWithoutDrive}`;
   }
-  // Handle UNC paths \\server\share -> /server/share  
-  else if (projectPath.startsWith('\\\\')) {
-    normalizedPath = projectPath.replace(/\\/g, '/').substring(1);
+  // Handle UNC paths \\server\share -> /server/share
+  else if (projectPath.startsWith("\\\\")) {
+    normalizedPath = projectPath.replace(/\\/g, "/").substring(1);
   }
-  
+
   // Security validation: Check against dangerous paths
-  const isDangerous = DANGEROUS_PATHS.some(dangerousPath => 
-    normalizedPath.toLowerCase().startsWith(dangerousPath.toLowerCase())
+  const isDangerous = DANGEROUS_PATHS.some((dangerousPath) =>
+    normalizedPath.toLowerCase().startsWith(dangerousPath.toLowerCase()),
   );
-  
+
   if (isDangerous) {
-    throw new Error(`Access denied: Path '${projectPath}' is restricted for security reasons. Please use workspace/project directories only.`);
+    throw new Error(
+      `Access denied: Path '${projectPath}' is restricted for security reasons. Please use workspace/project directories only.`,
+    );
   }
-  
+
   // Check if path matches allowed patterns (for public deployment)
-  const isAllowed = ALLOWED_PATH_PATTERNS.some(pattern => 
-    pattern.test(normalizedPath) || pattern.test(projectPath)
+  const isAllowed = ALLOWED_PATH_PATTERNS.some(
+    (pattern) => pattern.test(normalizedPath) || pattern.test(projectPath),
   );
-  
+
   if (!isAllowed) {
-    throw new Error(`Access denied: Path '${projectPath}' is not in an allowed workspace directory. Please use paths like 'C:\\Users\\YourName\\Projects' or '/home/user/Projects'.`);
+    throw new Error(
+      `Access denied: Path '${projectPath}' is not in an allowed workspace directory. Please use paths like 'C:\\Users\\YourName\\Projects' or '/home/user/Projects'.`,
+    );
   }
-  
+
   return normalizedPath;
 }
 
 // Helper function to resolve API keys from multiple sources
 function resolveApiKeys(params: any): string[] {
   const keys: string[] = [];
-  
+
   // Priority 1: geminiApiKeys string (comma-separated) or array
   if (params.geminiApiKeys) {
-    if (typeof params.geminiApiKeys === 'string') {
+    if (typeof params.geminiApiKeys === "string") {
       // Check if geminiApiKeys contains comma-separated multiple keys
-      if (params.geminiApiKeys.includes(',')) {
-        const multipleKeys = params.geminiApiKeys.split(',').map((key: string) => key.trim()).filter((key: string) => key.length > 0);
+      if (params.geminiApiKeys.includes(",")) {
+        const multipleKeys = params.geminiApiKeys
+          .split(",")
+          .map((key: string) => key.trim())
+          .filter((key: string) => key.length > 0);
         return multipleKeys;
       } else {
         return [params.geminiApiKeys];
       }
-    } else if (Array.isArray(params.geminiApiKeys) && params.geminiApiKeys.length > 0) {
+    } else if (
+      Array.isArray(params.geminiApiKeys) &&
+      params.geminiApiKeys.length > 0
+    ) {
       return params.geminiApiKeys;
     }
   }
-  
+
   // Priority 1.5: geminiApiKeysArray (explicit array)
-  if (params.geminiApiKeysArray && Array.isArray(params.geminiApiKeysArray) && params.geminiApiKeysArray.length > 0) {
+  if (
+    params.geminiApiKeysArray &&
+    Array.isArray(params.geminiApiKeysArray) &&
+    params.geminiApiKeysArray.length > 0
+  ) {
     return params.geminiApiKeysArray;
   }
-  
+
   // Priority 2: Backward compatibility - check old geminiApiKey field name
   if (params.geminiApiKey) {
     // Check if geminiApiKey contains comma-separated multiple keys
-    if (params.geminiApiKey.includes(',')) {
-      const multipleKeys = params.geminiApiKey.split(',').map((key: string) => key.trim()).filter((key: string) => key.length > 0);
+    if (params.geminiApiKey.includes(",")) {
+      const multipleKeys = params.geminiApiKey
+        .split(",")
+        .map((key: string) => key.trim())
+        .filter((key: string) => key.length > 0);
       keys.push(...multipleKeys);
     } else {
       keys.push(params.geminiApiKey);
     }
   }
-  
+
   // Priority 3: Collect all numbered API keys (geminiApiKey2 through geminiApiKey100)
   for (let i = 2; i <= 100; i++) {
     const keyField = `geminiApiKey${i}`;
@@ -154,20 +187,23 @@ function resolveApiKeys(params: any): string[] {
       keys.push(params[keyField]);
     }
   }
-  
+
   if (keys.length > 0) {
     return keys;
   }
-  
+
   // Priority 4: Environment variable
   if (process.env.GEMINI_API_KEY) {
     const envKeys = process.env.GEMINI_API_KEY;
-    if (envKeys.includes(',')) {
-      return envKeys.split(',').map((key: string) => key.trim()).filter((key: string) => key.length > 0);
+    if (envKeys.includes(",")) {
+      return envKeys
+        .split(",")
+        .map((key: string) => key.trim())
+        .filter((key: string) => key.length > 0);
     }
     return [envKeys];
   }
-  
+
   return [];
 }
 
@@ -177,80 +213,85 @@ async function retryWithApiKeyRotation<T>(
   createModelFn: (apiKey: string) => any,
   requestFn: (model: any) => Promise<T>,
   apiKeys: string[],
-  maxDurationMs: number = 4 * 60 * 1000 // 4 minutes total timeout
+  maxDurationMs: number = 4 * 60 * 1000, // 4 minutes total timeout
 ): Promise<T> {
   const startTime = Date.now();
   let currentKeyIndex = 0;
   let lastError: Error | undefined;
   let attemptCount = 0;
-  
-  logger.info('Starting API request with key rotation.', { 
+
+  logger.info("Starting API request with key rotation.", {
     totalKeys: apiKeys.length,
-    maxDurationMs: maxDurationMs 
+    maxDurationMs: maxDurationMs,
   });
-  
+
   while (Date.now() - startTime < maxDurationMs) {
     attemptCount++;
     const currentApiKey = apiKeys[currentKeyIndex];
-    
-    logger.debug('Attempting API request', {
+
+    logger.debug("Attempting API request", {
       attempt: attemptCount,
       keyIndex: currentKeyIndex + 1,
       totalKeys: apiKeys.length,
-      remainingTimeMs: maxDurationMs - (Date.now() - startTime)
+      remainingTimeMs: maxDurationMs - (Date.now() - startTime),
     });
-    
+
     try {
       const model = createModelFn(currentApiKey);
       const result = await requestFn(model);
-      
+
       if (attemptCount > 1) {
         logger.info(`API request successful after ${attemptCount} attempts.`, {
           succeededWithKeyIndex: currentKeyIndex + 1,
           totalAttempts: attemptCount,
           totalKeys: apiKeys.length,
-          durationMs: Date.now() - startTime
+          durationMs: Date.now() - startTime,
         });
       } else {
-        logger.debug('API request successful on first attempt', {
-          keyIndex: currentKeyIndex + 1
+        logger.debug("API request successful on first attempt", {
+          keyIndex: currentKeyIndex + 1,
         });
       }
-      
+
       return result;
     } catch (error: any) {
       lastError = error;
-      
-      logger.warn('API request failed', {
+
+      logger.warn("API request failed", {
         attempt: attemptCount,
         keyIndex: currentKeyIndex + 1,
         error: error.message,
-        errorCode: error.code || 'unknown'
+        errorCode: error.code || "unknown",
       });
-      
+
       // Check if it's a rate limit, quota, overload or invalid key error
-      const isRotatableError = error.message && (
-        error.message.includes('429') || 
-        error.message.includes('Too Many Requests') || 
-        error.message.includes('quota') || 
-        error.message.includes('rate limit') ||
-        error.message.includes('exceeded your current quota') ||
-        error.message.includes('API key not valid') ||
-        error.message.includes('503') ||
-        error.message.includes('Service Unavailable') ||
-        error.message.includes('overloaded') ||
-        error.message.includes('Please try again later')
-      );
-      
+      const isRotatableError =
+        error.message &&
+        (error.message.includes("429") ||
+          error.message.includes("Too Many Requests") ||
+          error.message.includes("quota") ||
+          error.message.includes("rate limit") ||
+          error.message.includes("exceeded your current quota") ||
+          error.message.includes("API key not valid") ||
+          error.message.includes("503") ||
+          error.message.includes("Service Unavailable") ||
+          error.message.includes("overloaded") ||
+          error.message.includes("Please try again later"));
+
       if (isRotatableError) {
         // Rotate to next API key
         const previousKeyIndex = currentKeyIndex + 1;
         currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length;
-        const remainingTime = Math.ceil((maxDurationMs - (Date.now() - startTime)) / 1000);
-        const errorType = error.message.includes('API key not valid') ? 'Invalid API key' : 
-                         error.message.includes('503') || error.message.includes('overloaded') ? 'Service overloaded' : 
-                         'Rate limit hit';
-        
+        const remainingTime = Math.ceil(
+          (maxDurationMs - (Date.now() - startTime)) / 1000,
+        );
+        const errorType = error.message.includes("API key not valid")
+          ? "Invalid API key"
+          : error.message.includes("503") ||
+              error.message.includes("overloaded")
+            ? "Service overloaded"
+            : "Rate limit hit";
+
         logger.warn(`API Key Rotation Triggered: ${errorType}`, {
           attempt: attemptCount,
           failedKeyIndex: previousKeyIndex,
@@ -258,78 +299,86 @@ async function retryWithApiKeyRotation<T>(
           totalKeys: apiKeys.length,
           remainingTimeSeconds: remainingTime,
           errorType: errorType,
-          originalError: error.message
+          originalError: error.message,
         });
-        
+
         // Small delay before trying next key
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
-      
+
       // For non-rate-limit errors, throw immediately
-      logger.error('Non-rotatable API error encountered.', { 
-        error: error.message, 
+      logger.error("Non-rotatable API error encountered.", {
+        error: error.message,
         attempt: attemptCount,
         keyIndex: currentKeyIndex + 1,
-        errorType: 'non-rotatable'
+        errorType: "non-rotatable",
       });
       throw error;
     }
   }
-  
+
   // 4 minutes expired
-  logger.error('API request failed after timeout with all keys.', {
+  logger.error("API request failed after timeout with all keys.", {
     totalAttempts: attemptCount,
     totalKeys: apiKeys.length,
     durationMs: Date.now() - startTime,
     lastError: lastError?.message,
-    status: 'timeout'
+    status: "timeout",
   });
-  throw new Error(`Gemini API requests failed after 4 minutes with ${attemptCount} attempts across ${apiKeys.length} API keys. All keys hit rate limits. Last error: ${lastError?.message || 'Unknown error'}`);
+  throw new Error(
+    `Gemini API requests failed after 4 minutes with ${attemptCount} attempts across ${apiKeys.length} API keys. All keys hit rate limits. Last error: ${lastError?.message || "Unknown error"}`,
+  );
 }
 
 // Backward compatibility wrapper for single API key
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
   maxRetries: number = 24, // 24 attempts = 2 minutes (5 seconds * 24 = 120 seconds)
-  delayMs: number = 5000 // 5 seconds between retries
+  delayMs: number = 5000, // 5 seconds between retries
 ): Promise<T> {
   let lastError: Error | undefined;
-  
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
     } catch (error: any) {
       lastError = error;
-      
+
       // Check if it's a rate limit error
-      const isRateLimit = error.message && (
-        error.message.includes('429') || 
-        error.message.includes('Too Many Requests') || 
-        error.message.includes('quota') || 
-        error.message.includes('rate limit') ||
-        error.message.includes('exceeded your current quota')
-      );
-      
+      const isRateLimit =
+        error.message &&
+        (error.message.includes("429") ||
+          error.message.includes("Too Many Requests") ||
+          error.message.includes("quota") ||
+          error.message.includes("rate limit") ||
+          error.message.includes("exceeded your current quota"));
+
       if (isRateLimit && attempt < maxRetries) {
-        const remainingTime = Math.ceil((maxRetries - attempt) * delayMs / 1000);
-        console.log(`🔄 Gemini API rate limit hit (attempt ${attempt}/${maxRetries}). Retrying in ${delayMs/1000}s... (${remainingTime}s remaining)`);
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+        const remainingTime = Math.ceil(
+          ((maxRetries - attempt) * delayMs) / 1000,
+        );
+        console.log(
+          `🔄 Gemini API rate limit hit (attempt ${attempt}/${maxRetries}). Retrying in ${delayMs / 1000}s... (${remainingTime}s remaining)`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
         continue;
       }
-      
+
       // If not a rate limit error, or we've exhausted retries, throw enhanced error
       if (isRateLimit) {
-        throw new Error(`Gemini API rate limit exceeded after ${maxRetries} attempts over 2 minutes. Please try again later or consider upgrading your API plan. Original error: ${error.message}`);
+        throw new Error(
+          `Gemini API rate limit exceeded after ${maxRetries} attempts over 2 minutes. Please try again later or consider upgrading your API plan. Original error: ${error.message}`,
+        );
       }
-      
+
       // For other errors, throw immediately
       throw error;
     }
   }
-  
+
   // This should never be reached, but just in case
-  throw lastError || new Error('Unknown error occurred');
+  throw lastError || new Error("Unknown error occurred");
 }
 
 // Gemini 2.5 Pro Token Calculator
@@ -338,38 +387,45 @@ function calculateTokens(text: string): number {
   // Gemini uses a similar tokenization to GPT models
   // Approximate: 1 token ≈ 4 characters for most text
   // More accurate estimation considering word boundaries and special characters
-  
+
   // Basic character count / 4 estimation
   const basicEstimate = Math.ceil(text.length / 4);
-  
+
   // Adjust for common patterns:
   // - Code has more tokens (more symbols, brackets, etc.)
   // - Newlines and spaces count as tokens
   // - Special characters in code increase token count
-  
+
   const newlineCount = (text.match(/\n/g) || []).length;
   const spaceCount = (text.match(/ /g) || []).length;
-  const specialCharsCount = (text.match(/[{}[\]();,.<>\/\\=+\-*&|!@#$%^`~]/g) || []).length;
-  
+  const specialCharsCount = (
+    text.match(/[{}[\]();,.<>\/\\=+\-*&|!@#$%^`~]/g) || []
+  ).length;
+
   // Adjustment factors for better accuracy
-  const adjustedEstimate = basicEstimate + 
-    Math.ceil(newlineCount * 0.5) + 
-    Math.ceil(spaceCount * 0.1) + 
+  const adjustedEstimate =
+    basicEstimate +
+    Math.ceil(newlineCount * 0.5) +
+    Math.ceil(spaceCount * 0.1) +
     Math.ceil(specialCharsCount * 0.2);
-  
+
   return adjustedEstimate;
 }
 
 // Token validation for Gemini 2.5 Pro
-function validateTokenLimit(content: string, systemPrompt: string, question: string): void {
+function validateTokenLimit(
+  content: string,
+  systemPrompt: string,
+  question: string,
+): void {
   const GEMINI_25_PRO_TOKEN_LIMIT = 1000000; // 1 million tokens
-  
+
   const contentTokens = calculateTokens(content);
   const systemTokens = calculateTokens(systemPrompt);
   const questionTokens = calculateTokens(question);
-  
+
   const totalTokens = contentTokens + systemTokens + questionTokens;
-  
+
   if (totalTokens > GEMINI_25_PRO_TOKEN_LIMIT) {
     const exceededBy = totalTokens - GEMINI_25_PRO_TOKEN_LIMIT;
     throw new Error(`Token limit exceeded! 
@@ -392,44 +448,85 @@ function validateTokenLimit(content: string, systemPrompt: string, question: str
 
 **Current project size: ${Math.round(content.length / 1024)} KB**`);
   }
-  
+
   // Log token usage for monitoring
-  console.log(`📊 Token usage: ${totalTokens.toLocaleString()}/${GEMINI_25_PRO_TOKEN_LIMIT.toLocaleString()} (${Math.round((totalTokens/GEMINI_25_PRO_TOKEN_LIMIT)*100)}%)`);
+  console.log(
+    `📊 Token usage: ${totalTokens.toLocaleString()}/${GEMINI_25_PRO_TOKEN_LIMIT.toLocaleString()} (${Math.round((totalTokens / GEMINI_25_PRO_TOKEN_LIMIT) * 100)}%)`,
+  );
 }
 
 // Helper function to generate API key schema fields dynamically
 function generateApiKeyFields() {
   const fields: any = {
-    geminiApiKeys: z.string().min(1).optional().describe("🔑 GEMINI API KEYS: Optional if set in environment variables. MULTI-KEY SUPPORT: You can enter multiple keys separated by commas for automatic rotation (e.g., 'key1,key2,key3'). Get yours at: https://makersuite.google.com/app/apikey"),
-    geminiApiKeysArray: z.array(z.string().min(1)).optional().describe("🔑 GEMINI API KEYS ARRAY: Multiple API keys array (alternative to comma-separated). When provided, the system will automatically rotate between keys to avoid rate limits. Example: ['key1', 'key2', 'key3']")
+    geminiApiKeys: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "🔑 GEMINI API KEYS: Optional if set in environment variables. MULTI-KEY SUPPORT: You can enter multiple keys separated by commas for automatic rotation (e.g., 'key1,key2,key3'). Get yours at: https://makersuite.google.com/app/apikey",
+      ),
+    geminiApiKeysArray: z
+      .array(z.string().min(1))
+      .optional()
+      .describe(
+        "🔑 GEMINI API KEYS ARRAY: Multiple API keys array (alternative to comma-separated). When provided, the system will automatically rotate between keys to avoid rate limits. Example: ['key1', 'key2', 'key3']",
+      ),
   };
-  
+
   // Add numbered API key fields (geminiApiKey2 through geminiApiKey100)
   for (let i = 2; i <= 100; i++) {
-    fields[`geminiApiKey${i}`] = z.string().min(1).optional().describe(`🔑 GEMINI API KEY ${i}: Optional additional API key for rate limit rotation`);
+    fields[`geminiApiKey${i}`] = z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        `🔑 GEMINI API KEY ${i}: Optional additional API key for rate limit rotation`,
+      );
   }
-  
+
   return fields;
 }
 
 // API Key Status Checker Schema
 const ApiKeyStatusSchema = z.object({
-  geminiApiKeys: z.string().min(1).optional().describe("🔑 GEMINI API KEYS: Optional if set in environment variables. MULTI-KEY SUPPORT: You can enter multiple keys separated by commas for automatic rotation (e.g., 'key1,key2,key3'). Get yours at: https://makersuite.google.com/app/apikey"),
-  ...generateApiKeyFields()
+  geminiApiKeys: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "🔑 GEMINI API KEYS: Optional if set in environment variables. MULTI-KEY SUPPORT: You can enter multiple keys separated by commas for automatic rotation (e.g., 'key1,key2,key3'). Get yours at: https://makersuite.google.com/app/apikey",
+    ),
+  ...generateApiKeyFields(),
 });
 
 // Gemini Codebase Analyzer Schema
 const GeminiCodebaseAnalyzerSchema = z.object({
-  question: z.string().min(1).max(2000).describe("❓ YOUR QUESTION: Ask anything about the codebase. 🌍 TIP: Use English for best AI performance! Examples: 'How does authentication work?', 'Find all API endpoints', 'Explain the database schema', 'What are the main components?', 'How to deploy this?', 'Find security vulnerabilities'. 💡 NEW USER? Use 'get_usage_guide' tool first to learn all capabilities!"),
-  temporaryIgnore: z.array(z.string()).optional().describe("🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']"),
-  ...generateApiKeyFields()
+  question: z
+    .string()
+    .min(1)
+    .max(2000)
+    .describe(
+      "❓ YOUR QUESTION: Ask anything about the codebase. 🌍 TIP: Use English for best AI performance! Examples: 'How does authentication work?', 'Find all API endpoints', 'Explain the database schema', 'What are the main components?', 'How to deploy this?', 'Find security vulnerabilities'. 💡 NEW USER? Use 'get_usage_guide' tool first to learn all capabilities!",
+    ),
+  temporaryIgnore: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']",
+    ),
+  ...generateApiKeyFields(),
 });
 
 // Gemini Code Search Schema - for targeted, fast searches
 const GeminiCodeSearchSchema = z.object({
-  projectPath: z.string().min(1).describe("📁 PROJECT PATH: Use '.' for current directory (recommended), or full path to your project. Examples: '.' (current dir), '/home/user/MyProject', 'C:\\Users\\Name\\Projects\\MyApp'. Only workspace/project directories allowed for security."),
-  temporaryIgnore: z.array(z.string()).optional().describe("🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']"),
-  searchQuery: z.string().min(1).max(500).describe(`🔍 SEARCH QUERY: What specific code pattern, function, or feature to find. 🌍 TIP: Use English for best AI performance! 💡 NEW USER? Use 'get_usage_guide' with 'search-tips' topic first! Examples:
+  temporaryIgnore: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']",
+    ),
+  searchQuery: z.string().min(1).max(500)
+    .describe(`🔍 SEARCH QUERY: What specific code pattern, function, or feature to find. 🌍 TIP: Use English for best AI performance! 💡 NEW USER? Use 'get_usage_guide' with 'search-tips' topic first! Examples:
 • 'authentication logic' - Find login/auth code
 • 'error handling' - Find try-catch blocks
 • 'database connection' - Find DB setup
@@ -440,14 +537,35 @@ const GeminiCodeSearchSchema = z.object({
 • 'import express' - Find Express usage
 • 'useState hook' - Find React state
 • 'SQL queries' - Find database queries`),
-  fileTypes: z.array(z.string()).optional().describe("📄 FILE TYPES: Limit search to specific file extensions. Examples: ['.ts', '.js'] for TypeScript/JavaScript, ['.py'] for Python, ['.jsx', '.tsx'] for React, ['.vue'] for Vue, ['.go'] for Go. Leave empty to search all code files."),
-  maxResults: z.number().min(1).max(20).optional().describe("🎯 MAX RESULTS: Maximum number of relevant code snippets to analyze (default: 5, max: 20). Higher numbers = more comprehensive but slower analysis."),
-  ...generateApiKeyFields()
+  fileTypes: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "📄 FILE TYPES: Limit search to specific file extensions. Examples: ['.ts', '.js'] for TypeScript/JavaScript, ['.py'] for Python, ['.jsx', '.tsx'] for React, ['.vue'] for Vue, ['.go'] for Go. Leave empty to search all code files.",
+    ),
+  maxResults: z
+    .number()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe(
+      "🎯 MAX RESULTS: Maximum number of relevant code snippets to analyze (default: 5, max: 20). Higher numbers = more comprehensive but slower analysis.",
+    ),
+  ...generateApiKeyFields(),
 });
 
 // Usage Guide Schema - helps users understand how to use this MCP server
 const UsageGuideSchema = z.object({
-  topic: z.enum(["overview", "getting-started", "analysis-modes", "search-tips", "examples", "troubleshooting"]).optional().describe(`📖 HELP TOPIC (choose what you need help with):
+  topic: z
+    .enum([
+      "overview",
+      "getting-started",
+      "analysis-modes",
+      "search-tips",
+      "examples",
+      "troubleshooting",
+    ])
+    .optional().describe(`📖 HELP TOPIC (choose what you need help with):
 • overview - What this MCP server does and its capabilities
 • getting-started - First steps and basic usage
 • analysis-modes - Detailed guide to all 26 analysis modes
@@ -455,57 +573,130 @@ const UsageGuideSchema = z.object({
 • examples - Real-world usage examples and workflows
 • troubleshooting - Common issues and solutions
 
-💡 TIP: Start with 'overview' if you're new to this MCP server!`)
+💡 TIP: Start with 'overview' if you're new to this MCP server!`),
 });
 
 // Dynamic Expert Mode Step 1: Create Custom Expert Schema
 const DynamicExpertCreateSchema = z.object({
-  projectPath: z.string().min(1).describe("📁 PROJECT PATH: Use '.' for current directory (recommended), or full path to your project. Examples: '.' (current dir), '/home/user/MyProject', 'C:\\Users\\Name\\Projects\\MyApp'. Only workspace/project directories allowed for security."),
-  temporaryIgnore: z.array(z.string()).optional().describe("🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']"),
-  expertiseHint: z.string().min(1).max(200).optional().describe("🎯 EXPERTISE HINT (optional): Suggest what kind of expert you need. Examples: 'React performance expert', 'Database architect', 'Security auditor', 'DevOps specialist'. Leave empty for automatic expert selection based on your project."),
-  ...generateApiKeyFields()
+  temporaryIgnore: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']",
+    ),
+  expertiseHint: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "🎯 EXPERTISE HINT (optional): Suggest what kind of expert you need. Examples: 'React performance expert', 'Database architect', 'Security auditor', 'DevOps specialist'. Leave empty for automatic expert selection based on your project.",
+    ),
+  ...generateApiKeyFields(),
 });
 
 // Dynamic Expert Mode Step 2: Analyze with Custom Expert Schema
 const DynamicExpertAnalyzeSchema = z.object({
-  projectPath: z.string().min(1).describe("📁 PROJECT PATH: Use '.' for current directory (recommended), or full path to your project. Examples: '.' (current dir), '/home/user/MyProject', 'C:\\Users\\Name\\Projects\\MyApp'. Only workspace/project directories allowed for security."),
-  temporaryIgnore: z.array(z.string()).optional().describe("🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']"),
-  question: z.string().min(1).max(2000).describe("❓ YOUR QUESTION: Ask anything about the codebase. 🌍 TIP: Use English for best AI performance! This will be analyzed using the custom expert mode created in step 1."),
-  expertPrompt: z.string().min(1).max(10000).describe("🎯 EXPERT PROMPT: The custom expert system prompt generated by 'gemini_dynamic_expert_create' tool. Copy the entire expert prompt from the previous step."),
-  ...generateApiKeyFields()
+  temporaryIgnore: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']",
+    ),
+  question: z
+    .string()
+    .min(1)
+    .max(2000)
+    .describe(
+      "❓ YOUR QUESTION: Ask anything about the codebase. 🌍 TIP: Use English for best AI performance! This will be analyzed using the custom expert mode created in step 1.",
+    ),
+  expertPrompt: z
+    .string()
+    .min(1)
+    .max(10000)
+    .describe(
+      "🎯 EXPERT PROMPT: The custom expert system prompt generated by 'gemini_dynamic_expert_create' tool. Copy the entire expert prompt from the previous step.",
+    ),
+  ...generateApiKeyFields(),
 });
 
 // Schema for reading log files
 const ReadLogFileSchema = z.object({
-  filename: z.enum(["activity.log", "error.log"]).describe("📄 LOG FILE NAME: Choose which log file to read. 'activity.log' contains all operations and debug info. 'error.log' contains only errors and critical issues."),
+  filename: z
+    .enum(["activity.log", "error.log"])
+    .describe(
+      "📄 LOG FILE NAME: Choose which log file to read. 'activity.log' contains all operations and debug info. 'error.log' contains only errors and critical issues.",
+    ),
 });
 
 // Project Orchestrator Step 1: Create Groups and Analysis Plan Schema
 const ProjectOrchestratorCreateSchema = z.object({
-  temporaryIgnore: z.array(z.string()).optional().describe("🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']"),
-  maxTokensPerGroup: z.number().min(100000).max(950000).default(900000).optional().describe("🔢 MAX TOKENS PER GROUP: Maximum tokens per file group (default: 900K, max: 950K). Lower values create smaller groups for more detailed analysis. Higher values allow larger chunks but may hit API limits."),
-  ...generateApiKeyFields()
+  temporaryIgnore: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']",
+    ),
+  maxTokensPerGroup: z
+    .number()
+    .min(100000)
+    .max(950000)
+    .default(900000)
+    .optional()
+    .describe(
+      "🔢 MAX TOKENS PER GROUP: Maximum tokens per file group (default: 900K, max: 950K). Lower values create smaller groups for more detailed analysis. Higher values allow larger chunks but may hit API limits.",
+    ),
+  ...generateApiKeyFields(),
 });
 
 // Project Orchestrator Step 2: Analyze with Groups Schema
 const ProjectOrchestratorAnalyzeSchema = z.object({
-  temporaryIgnore: z.array(z.string()).optional().describe("🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']"),
-  question: z.string().min(1).max(2000).describe("❓ YOUR QUESTION: Ask anything about the codebase. 🌍 TIP: Use English for best AI performance! This will be analyzed using the file groups created in step 1."),
-  fileGroupsData: z.string().min(1).max(50000).describe("📦 FILE GROUPS DATA: The file groups data generated by 'project_orchestrator_create' tool. Copy the entire groups data from step 1."),
-  maxTokensPerGroup: z.number().min(100000).max(950000).default(900000).optional().describe("🔢 MAX TOKENS PER GROUP: Maximum tokens per file group (default: 900K, max: 950K). Must match the value used in step 1."),
-  ...generateApiKeyFields()
+  temporaryIgnore: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "🚫 TEMPORARY IGNORE: One-time file exclusions (in addition to .gitignore). Use glob patterns like 'dist/**', '*.log', 'node_modules/**', 'temp-file.js'. This won't modify .gitignore, just exclude files for this analysis only. Examples: ['build/**', 'src/legacy/**', '*.test.js']",
+    ),
+  question: z
+    .string()
+    .min(1)
+    .max(2000)
+    .describe(
+      "❓ YOUR QUESTION: Ask anything about the codebase. 🌍 TIP: Use English for best AI performance! This will be analyzed using the file groups created in step 1.",
+    ),
+  fileGroupsData: z
+    .string()
+    .min(1)
+    .max(50000)
+    .describe(
+      "📦 FILE GROUPS DATA: The file groups data generated by 'project_orchestrator_create' tool. Copy the entire groups data from step 1.",
+    ),
+  maxTokensPerGroup: z
+    .number()
+    .min(100000)
+    .max(950000)
+    .default(900000)
+    .optional()
+    .describe(
+      "🔢 MAX TOKENS PER GROUP: Maximum tokens per file group (default: 900K, max: 950K). Must match the value used in step 1.",
+    ),
+  ...generateApiKeyFields(),
 });
 
 // Create the server
-const server = new Server({
-  name: "gemini-mcp-server",
-  version: "1.0.0",
-  description: "🚀 GEMINI AI CODEBASE ASSISTANT - Your expert coding companion with 36 specialized analysis modes! 💡 START HERE: Use 'get_usage_guide' tool to learn all capabilities."
-}, {
-  capabilities: {
-    tools: {},
+const server = new Server(
+  {
+    name: "gemini-mcp-server",
+    version: "1.0.0",
+    description:
+      "🚀 GEMINI AI CODEBASE ASSISTANT - Your expert coding companion with 36 specialized analysis modes! 💡 START HERE: Use 'get_usage_guide' tool to learn all capabilities.",
   },
-});
+  {
+    capabilities: {
+      tools: {},
+    },
+  },
+);
 
 // List tools handler
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -513,57 +704,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "get_usage_guide",
-        description: "📖 GET USAGE GUIDE - **START HERE!** Learn how to use this MCP server effectively. Essential for understanding all capabilities, analysis modes, and workflows. Use this first if you're new to the server.",
+        description:
+          "📖 GET USAGE GUIDE - **START HERE!** Learn how to use this MCP server effectively. Essential for understanding all capabilities, analysis modes, and workflows. Use this first if you're new to the server.",
         inputSchema: zodToJsonSchema(UsageGuideSchema),
       },
       {
-        name: "set_repository",
-        description: "🔗 SET REPOSITORY - **STEP 1** Clone and setup GitHub repository for analysis. This is your starting point - always use this first to set up the workspace before using any analysis tools.",
-        inputSchema: zodToJsonSchema(SetRepositoryInputSchema),
-      },
-      {
-        name: "get_repository_token_usage",
-        description: "📊 GET REPOSITORY TOKEN USAGE - **STEP 2** Analyze token usage and get recommendations. Use this after setting repository to understand project size and choose the right analysis approach.",
-        inputSchema: zodToJsonSchema(GetTokenUsageInputSchema),
-      },
-      {
         name: "check_api_key_status",
-        description: "🔑 CHECK API KEY STATUS - Monitor your Gemini API keys configuration. Shows how many keys are configured, validates them, and provides rate limit protection status. Perfect for debugging API key issues.",
+        description:
+          "🔑 CHECK API KEY STATUS - Monitor your Gemini API keys configuration. Shows how many keys are configured, validates them, and provides rate limit protection status. Perfect for debugging API key issues.",
         inputSchema: zodToJsonSchema(ApiKeyStatusSchema),
       },
       {
         name: "gemini_dynamic_expert_create",
-        description: "🎯 DYNAMIC EXPERT CREATE - **STEP 1 of 2** Generate a custom expert mode for your project! AI analyzes your codebase and creates a specialized expert persona. Use this first, then use the generated expert prompt with 'gemini_dynamic_expert_analyze'.",
+        description:
+          "🎯 DYNAMIC EXPERT CREATE - **STEP 1 of 2** Generate a custom expert mode for your project! AI analyzes your codebase and creates a specialized expert persona. Use this first, then use the generated expert prompt with 'gemini_dynamic_expert_analyze'.",
         inputSchema: zodToJsonSchema(DynamicExpertCreateSchema),
       },
       {
         name: "gemini_dynamic_expert_analyze",
-        description: "🎯 DYNAMIC EXPERT ANALYZE - **STEP 2 of 2** Use the custom expert created in step 1 to analyze your project! Provide the expert prompt from 'gemini_dynamic_expert_create' to get specialized analysis tailored to your specific project.",
+        description:
+          "🎯 DYNAMIC EXPERT ANALYZE - **STEP 2 of 2** Use the custom expert created in step 1 to analyze your project! Provide the expert prompt from 'gemini_dynamic_expert_create' to get specialized analysis tailored to your specific project.",
         inputSchema: zodToJsonSchema(DynamicExpertAnalyzeSchema),
       },
       {
         name: "gemini_codebase_analyzer",
-        description: "🔍 COMPREHENSIVE CODEBASE ANALYSIS - Deep dive into entire project with expert analysis modes. Use for understanding architecture, getting explanations, code reviews, security audits, etc. 36 specialized analysis modes available.",
+        description:
+          "🔍 COMPREHENSIVE CODEBASE ANALYSIS - Deep dive into entire project with expert analysis modes. Use for understanding architecture, getting explanations, code reviews, security audits, etc. 36 specialized analysis modes available.",
         inputSchema: zodToJsonSchema(GeminiCodebaseAnalyzerSchema),
       },
       {
         name: "gemini_code_search",
-        description: "⚡ FAST TARGETED SEARCH - Quickly find specific code patterns, functions, or features. Use when you know what you're looking for but need to locate it fast. Perfect for finding specific implementations.",
+        description:
+          "⚡ FAST TARGETED SEARCH - Quickly find specific code patterns, functions, or features. Use when you know what you're looking for but need to locate it fast. Perfect for finding specific implementations.",
         inputSchema: zodToJsonSchema(GeminiCodeSearchSchema),
       },
       {
         name: "read_log_file",
-        description: "📄 READ LOG FILE - Read the contents of a server log file ('activity.log' or 'error.log'). Useful for debugging the server itself, monitoring API key rotation, and troubleshooting issues.",
+        description:
+          "📄 READ LOG FILE - Read the contents of a server log file ('activity.log' or 'error.log'). Useful for debugging the server itself, monitoring API key rotation, and troubleshooting issues.",
         inputSchema: zodToJsonSchema(ReadLogFileSchema),
       },
       {
         name: "project_orchestrator_create",
-        description: "🎭 PROJECT ORCHESTRATOR CREATE - **STEP 1 of 2** Analyze massive projects and create intelligent file groups! Automatically handles projects over 1M tokens by grouping files efficiently. Use this first, then use 'project_orchestrator_analyze' with the groups data.",
+        description:
+          "🎭 PROJECT ORCHESTRATOR CREATE - **STEP 1 of 2** Analyze massive projects and create intelligent file groups! Automatically handles projects over 1M tokens by grouping files efficiently. Use this first, then use 'project_orchestrator_analyze' with the groups data.",
         inputSchema: zodToJsonSchema(ProjectOrchestratorCreateSchema),
       },
       {
         name: "project_orchestrator_analyze",
-        description: "🎭 PROJECT ORCHESTRATOR ANALYZE - **STEP 2 of 2** Analyze each file group and combine results! Use the groups data from 'project_orchestrator_create' to perform comprehensive analysis of massive codebases without timeout issues.",
+        description:
+          "🎭 PROJECT ORCHESTRATOR ANALYZE - **STEP 2 of 2** Analyze each file group and combine results! Use the groups data from 'project_orchestrator_create' to perform comprehensive analysis of massive codebases without timeout issues.",
         inputSchema: zodToJsonSchema(ProjectOrchestratorAnalyzeSchema),
       },
     ],
@@ -572,43 +762,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 // Tool execution handler
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  logger.info('Received tool call request', { 
-    toolName: request.params.name, 
+  logger.info("Received tool call request", {
+    toolName: request.params.name,
     hasArguments: !!request.params.arguments,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
-  
+
   switch (request.params.name) {
     case "get_usage_guide":
       try {
         const params = UsageGuideSchema.parse(request.params.arguments);
         const topic = params.topic || "overview";
-        
+
         const guides = {
           overview: `# 🚀 Gemini AI Codebase Assistant - Hoş Geldiniz ve Başlangıç Kılavuzu
 
-## Yeni "Repo Odaklı" İş Akışı
-Bu MCP sunucu artık **GitHub repository'leri** üzerinde odaklanmış akıllı bir asistan! Artık statik analiz modları yerine **dinamik uzman promptları** kullanıyoruz.
+## Yeni "Proje Odaklı" İş Akışı
+Bu MCP sunucu artık **yerel proje dizinleri** üzerinde odaklanmış akıllı bir asistan! Artık statik analiz modları yerine **dinamik uzman promptları** kullanıyoruz.
 
 ## 🔄 Başlangıç İş Akışı (ÖNEMLİ!)
-### 1. **ADIM 1: Repository'yi Ayarlayın**
-\`\`\`
-set_repository
-repoUrl: https://github.com/user/repo.git
-\`\`\`
-- GitHub repo'sunu klonlar ve çalışma alanını hazırlar
-- Otomatik token hesaplama ve öneri sunumu
-- Repository değiştirilene kadar aktif kalır
-
-### 2. **ADIM 2: Token Durumunu Kontrol Edin**
-\`\`\`
-get_repository_token_usage
-\`\`\`
-- Detaylı token analizi ve dosya dağılımı
-- Hangi aracı kullanacağınıza karar vermenize yardımcı olur
-- Proje boyutuna göre öneriler sunar
-
-### 3. **ADIM 3: Uygun Aracı Seçin**
+### 1. **ADIM 1: Uygun Aracı Seçin**
 **Küçük Projeler (< 500K token):**
 - \`gemini_codebase_analyzer\` - Tek seferde analiz
 
@@ -617,10 +790,6 @@ get_repository_token_usage
 - \`project_orchestrator_analyze\` - Paralel grup analizi
 
 ## 🎯 Araçlar ve Özellikleri
-### 🏠 **Repository Yönetimi**
-- **set_repository**: GitHub repo klonlama ve hazırlık
-- **get_repository_token_usage**: Token analizi ve öneriler
-
 ### 🔍 **Analiz Araçları**
 - **gemini_codebase_analyzer**: Genel analizler (küçük projeler)
 - **project_orchestrator_create**: Akıllı dosya gruplama (büyük projeler)
@@ -632,12 +801,11 @@ get_repository_token_usage
 ## 💡 Yeni Özellikler
 - **Akıllı Orkestrasyon**: Her dosya grubu için özel uzman AI promptları
 - **Otomatik Token Yönetimi**: Token limitlerini aşma riski yok
-- **Repo Odaklı Workflow**: GitHub entegrasyonu ile sorunsuz çalışma
+- **Proje Odaklı Workflow**: Yerel proje dizinleri ile sorunsuz çalışma
 - **Dinamik Uzman Promptları**: Statik modlar yerine context-aware uzmanlar
 
 ## ⚠️ Önemli Değişiklikler
-- Artık yerel dosya yolları (\`projectPath\`) kullanmıyoruz
-- Önce repository ayarlanmalı (\`set_repository\`)
+- Çalışma dizini (current working directory) otomatik olarak proje yolu olarak kullanılır
 - Token limitleri otomatik kontrol edilir
 - 26 statik analiz modu kaldırıldı, dinamik uzman promptları kullanılıyor`,
 
@@ -1026,7 +1194,7 @@ Question: "Analyze the database schema, relationships, and suggest optimizations
 1. **Start with**: \`get_usage_guide\` with \`overview\` topic
 2. **Learn modes**: Use \`analysis-modes\` topic
 3. **Search help**: Use \`search-tips\` topic
-4. **Still stuck?** Try \`examples\` topic for workflows`
+4. **Still stuck?** Try \`examples\` topic for workflows`,
         };
 
         return {
@@ -1066,46 +1234,56 @@ Use \`get_usage_guide\` with topic "overview" to get started.`,
     case "check_api_key_status":
       try {
         const params = ApiKeyStatusSchema.parse(request.params.arguments);
-        
+
         // Resolve API keys from all sources
         const apiKeys = resolveApiKeys(params);
-        
+
         // Environment variable check
         const envApiKey = process.env.GEMINI_API_KEY;
-        
+
         // Count different key sources
         let commaKeys = 0;
         let individualKeys = 0;
         let arrayKeys = 0;
-        
+
         if (params.geminiApiKeys) {
-          if (params.geminiApiKeys.includes(',')) {
-            commaKeys = params.geminiApiKeys.split(',').map((k: string) => k.trim()).filter((k: string) => k.length > 0).length;
+          if (params.geminiApiKeys.includes(",")) {
+            commaKeys = params.geminiApiKeys
+              .split(",")
+              .map((k: string) => k.trim())
+              .filter((k: string) => k.length > 0).length;
           } else {
             commaKeys = 1;
           }
         }
-        
-        if (params.geminiApiKeysArray && Array.isArray(params.geminiApiKeysArray)) {
+
+        if (
+          params.geminiApiKeysArray &&
+          Array.isArray(params.geminiApiKeysArray)
+        ) {
           arrayKeys = params.geminiApiKeysArray.length;
         }
-        
+
         // Count individual numbered keys
         for (let i = 2; i <= 100; i++) {
           if (params[`geminiApiKey${i}`]) {
             individualKeys++;
           }
         }
-        
+
         // Generate rotation schedule preview
-        const rotationPreview = apiKeys.slice(0, 10).map((key, index) => {
-          const maskedKey = key.substring(0, 8) + "..." + key.substring(key.length - 4);
-          return `${index + 1}. ${maskedKey}`;
-        }).join('\n');
-        
+        const rotationPreview = apiKeys
+          .slice(0, 10)
+          .map((key, index) => {
+            const maskedKey =
+              key.substring(0, 8) + "..." + key.substring(key.length - 4);
+            return `${index + 1}. ${maskedKey}`;
+          })
+          .join("\n");
+
         const totalKeys = apiKeys.length;
         const rotationTime = totalKeys > 0 ? Math.ceil(240 / totalKeys) : 0; // 4 minutes / keys
-        
+
         return {
           content: [
             {
@@ -1114,29 +1292,33 @@ Use \`get_usage_guide\` with topic "overview" to get started.`,
 
 ## 📊 Configuration Summary
 - **Total Active Keys**: ${totalKeys}
-- **Environment Variable**: ${envApiKey ? '✅ Set' : '❌ Not set'}
-- **Rotation Available**: ${totalKeys > 1 ? '✅ Yes' : '❌ Single key only'}
-- **Rate Limit Protection**: ${totalKeys > 1 ? '🛡️ Active' : '⚠️ Limited'}
+- **Environment Variable**: ${envApiKey ? "✅ Set" : "❌ Not set"}
+- **Rotation Available**: ${totalKeys > 1 ? "✅ Yes" : "❌ Single key only"}
+- **Rate Limit Protection**: ${totalKeys > 1 ? "🛡️ Active" : "⚠️ Limited"}
 
 ## 📈 Key Sources Breakdown
-- **Comma-separated keys**: ${commaKeys} ${commaKeys > 0 ? '(geminiApiKeys field)' : ''}
-- **Individual numbered keys**: ${individualKeys} ${individualKeys > 0 ? '(geminiApiKey2-100)' : ''}
-- **Array format keys**: ${arrayKeys} ${arrayKeys > 0 ? '(geminiApiKeysArray)' : ''}
+- **Comma-separated keys**: ${commaKeys} ${commaKeys > 0 ? "(geminiApiKeys field)" : ""}
+- **Individual numbered keys**: ${individualKeys} ${individualKeys > 0 ? "(geminiApiKey2-100)" : ""}
+- **Array format keys**: ${arrayKeys} ${arrayKeys > 0 ? "(geminiApiKeysArray)" : ""}
 
 ## 🔄 Rotation Strategy
-${totalKeys > 1 ? `
+${
+  totalKeys > 1
+    ? `
 **Rotation Schedule**: ${rotationTime} seconds per key
 **Maximum uptime**: 4 minutes continuous rotation
 **Fallback protection**: Automatic key switching on rate limits
 
 **Key Rotation Preview** (first 10 keys):
 ${rotationPreview}
-${totalKeys > 10 ? `\n... and ${totalKeys - 10} more keys` : ''}
-` : `
+${totalKeys > 10 ? `\n... and ${totalKeys - 10} more keys` : ""}
+`
+    : `
 **Single Key Mode**: No rotation available
 **Recommendation**: Add more keys for better rate limit protection
 **How to add**: Use comma-separated format in geminiApiKeys field
-`}
+`
+}
 
 ## 🎯 Performance Optimization
 - **Recommended keys**: 5-10 for optimal performance
@@ -1144,22 +1326,28 @@ ${totalKeys > 10 ? `\n... and ${totalKeys - 10} more keys` : ''}
 - **Current efficiency**: ${Math.min(100, (totalKeys / 10) * 100).toFixed(1)}%
 
 ## 🚀 Usage Tips
-${totalKeys === 0 ? `
+${
+  totalKeys === 0
+    ? `
 ❌ **No API keys configured!**
 - Add keys to geminiApiKeys field: "key1,key2,key3"
 - Or set environment variable: GEMINI_API_KEY
 - Get keys from: https://makersuite.google.com/app/apikey
-` : totalKeys === 1 ? `
+`
+    : totalKeys === 1
+      ? `
 ⚠️ **Single key detected**
 - Consider adding more keys for better rate limit protection
 - Use comma-separated format: "key1,key2,key3"
 - Or individual fields: geminiApiKey2, geminiApiKey3, etc.
-` : `
+`
+      : `
 ✅ **Multi-key configuration active**
 - Rate limit protection is active
 - Automatic failover enabled
 - Optimal performance achieved
-`}
+`
+}
 
 ## 🔧 Troubleshooting
 - **Rate limits**: With ${totalKeys} keys, you can handle ${totalKeys}x more requests
@@ -1169,7 +1357,7 @@ ${totalKeys === 0 ? `
 ---
 
 *Status checked at ${new Date().toISOString()}*
-*Next rotation cycle: ${totalKeys > 1 ? `${rotationTime}s per key` : 'No rotation'}*`,
+*Next rotation cycle: ${totalKeys > 1 ? `${rotationTime}s per key` : "No rotation"}*`,
             },
           ],
           isError: false,
@@ -1197,16 +1385,21 @@ ${totalKeys === 0 ? `
 
     case "gemini_dynamic_expert_create":
       try {
-        const params = DynamicExpertCreateSchema.parse(request.params.arguments);
-        
-        // Normalize Windows paths to WSL/Linux format  
-        const normalizedPath = normalizeProjectPath(params.projectPath);
-        
+        const params = DynamicExpertCreateSchema.parse(
+          request.params.arguments,
+        );
+
+        // Get project path from current working directory
+        const projectPath = process.cwd();
+        const normalizedPath = normalizeProjectPath(projectPath);
+
         // Resolve API keys from multiple sources
         const apiKeys = resolveApiKeys(params);
-        
+
         if (apiKeys.length === 0) {
-          throw new Error("At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey");
+          throw new Error(
+            "At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey",
+          );
         }
 
         // Validate normalized project path exists
@@ -1214,18 +1407,23 @@ ${totalKeys === 0 ? `
         try {
           stats = await fs.stat(normalizedPath);
         } catch (error: any) {
-          if (error.code === 'ENOENT') {
-            throw new Error(`ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${params.projectPath}')`);
+          if (error.code === "ENOENT") {
+            throw new Error(
+              `ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${projectPath}')`,
+            );
           }
           throw new Error(`Failed to access project path: ${error.message}`);
         }
-        
+
         if (!stats.isDirectory()) {
           throw new Error(`Project path is not a directory: ${normalizedPath}`);
         }
 
         // Get project context with temporary ignore patterns
-        const fullContext = await prepareFullContext(normalizedPath, params.temporaryIgnore);
+        const fullContext = await prepareFullContext(
+          normalizedPath,
+          params.temporaryIgnore,
+        );
 
         // STEP 1: Generate Dynamic Expert Mode
         const expertGenerationPrompt = `# Dynamic Expert Mode Generator
@@ -1256,31 +1454,31 @@ Return ONLY a complete system prompt that starts with "You are a **[Expert Title
 Make the expert persona highly specific to this project's stack, patterns, and domain. The more targeted, the better the analysis will be.`;
 
         // Validate token limit for expert generation
-        validateTokenLimit(fullContext, '', expertGenerationPrompt);
+        validateTokenLimit(fullContext, "", expertGenerationPrompt);
 
         // Generate the custom expert mode using API key rotation
         const createModelFn = (apiKey: string) => {
           const genAI = new GoogleGenerativeAI(apiKey);
-          return genAI.getGenerativeModel({ 
+          return genAI.getGenerativeModel({
             model: "gemini-2.5-pro",
             generationConfig: {
               maxOutputTokens: 4096,
               temperature: 0.3, // Lower temperature for more consistent expert generation
               topK: 40,
               topP: 0.95,
-            }
+            },
           });
         };
 
-        const expertResult = await retryWithApiKeyRotation(
+        const expertResult = (await retryWithApiKeyRotation(
           createModelFn,
           (model) => model.generateContent(expertGenerationPrompt),
-          apiKeys
-        ) as any;
+          apiKeys,
+        )) as any;
         const expertResponse = await expertResult.response;
         const customExpertPrompt = expertResponse.text();
 
-        const filesProcessed = fullContext.split('--- File:').length - 1;
+        const filesProcessed = fullContext.split("--- File:").length - 1;
 
         return {
           content: [
@@ -1288,7 +1486,7 @@ Make the expert persona highly specific to this project's stack, patterns, and d
               type: "text",
               text: `# Dynamic Expert Created Successfully! 
 
-## Project: ${params.projectPath}
+## Project: ${projectPath}
 *Normalized Path:* ${normalizedPath}
 
 **Expert Generated For:** ${params.expertiseHint || "Auto-detected expertise"}  
@@ -1309,7 +1507,7 @@ ${customExpertPrompt}
 
 1. **Copy the expert prompt above** (the entire content between the backticks)
 2. **Use the 'gemini_dynamic_expert_analyze' tool** with:
-   - Same project path: \`${params.projectPath}\`
+   - Same project path: \`${projectPath}\`
    - Your specific question
    - The expert prompt you just copied
    - Same temporary ignore patterns (if any)
@@ -1347,7 +1545,7 @@ This custom expert is now ready to provide highly specialized analysis tailored 
 - Ensure the project path is accessible to the server
 - Try with a simpler question or smaller project
 
-*Error occurred during: ${error.message.includes('ENOENT') ? 'Path validation' : error.message.includes('API key') ? 'API key validation' : 'Dynamic expert generation'}*`,
+*Error occurred during: ${error.message.includes("ENOENT") ? "Path validation" : error.message.includes("API key") ? "API key validation" : "Dynamic expert generation"}*`,
             },
           ],
           isError: true,
@@ -1356,16 +1554,21 @@ This custom expert is now ready to provide highly specialized analysis tailored 
 
     case "gemini_dynamic_expert_analyze":
       try {
-        const params = DynamicExpertAnalyzeSchema.parse(request.params.arguments);
-        
-        // Normalize Windows paths to WSL/Linux format  
-        const normalizedPath = normalizeProjectPath(params.projectPath);
-        
+        const params = DynamicExpertAnalyzeSchema.parse(
+          request.params.arguments,
+        );
+
+        // Get project path from current working directory
+        const projectPath = process.cwd();
+        const normalizedPath = normalizeProjectPath(projectPath);
+
         // Resolve API keys from multiple sources
         const apiKeys = resolveApiKeys(params);
-        
+
         if (apiKeys.length === 0) {
-          throw new Error("At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey");
+          throw new Error(
+            "At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey",
+          );
         }
 
         // Validate normalized project path exists
@@ -1373,26 +1576,31 @@ This custom expert is now ready to provide highly specialized analysis tailored 
         try {
           stats = await fs.stat(normalizedPath);
         } catch (error: any) {
-          if (error.code === 'ENOENT') {
-            throw new Error(`ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${params.projectPath}')`);
+          if (error.code === "ENOENT") {
+            throw new Error(
+              `ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${projectPath}')`,
+            );
           }
           throw new Error(`Failed to access project path: ${error.message}`);
         }
-        
+
         if (!stats.isDirectory()) {
           throw new Error(`Project path is not a directory: ${normalizedPath}`);
         }
 
         // Get project context with temporary ignore patterns
-        const fullContext = await prepareFullContext(normalizedPath, params.temporaryIgnore);
-        
+        const fullContext = await prepareFullContext(
+          normalizedPath,
+          params.temporaryIgnore,
+        );
+
         if (fullContext.length === 0) {
           throw new Error("No readable files found in the project directory");
         }
 
         // STEP 2: Use the custom expert prompt for analysis
         const customExpertPrompt = params.expertPrompt;
-        
+
         // Create the mega prompt using the custom expert
         const megaPrompt = `${customExpertPrompt}
 
@@ -1408,26 +1616,26 @@ ${params.question}`;
         // Send to Gemini AI with API key rotation for rate limits
         const createModelFn = (apiKey: string) => {
           const genAI = new GoogleGenerativeAI(apiKey);
-          return genAI.getGenerativeModel({ 
+          return genAI.getGenerativeModel({
             model: "gemini-2.5-pro",
             generationConfig: {
               maxOutputTokens: 65536,
               temperature: 0.5,
               topK: 40,
               topP: 0.95,
-            }
+            },
           });
         };
 
-        const result = await retryWithApiKeyRotation(
+        const result = (await retryWithApiKeyRotation(
           createModelFn,
           (model) => model.generateContent(megaPrompt),
-          apiKeys
-        ) as any;
+          apiKeys,
+        )) as any;
         const response = await result.response;
         const analysis = response.text();
 
-        const filesProcessed = fullContext.split('--- File:').length - 1;
+        const filesProcessed = fullContext.split("--- File:").length - 1;
 
         return {
           content: [
@@ -1435,7 +1643,7 @@ ${params.question}`;
               type: "text",
               text: `# Dynamic Expert Analysis Results
 
-## Project: ${params.projectPath}
+## Project: ${projectPath}
 *Normalized Path:* ${normalizedPath}
 
 **Question:** ${params.question}
@@ -1483,7 +1691,7 @@ ${analysis}
 - Make sure you used the complete expert prompt from 'gemini_dynamic_expert_create'
 - Try with a simpler question or smaller project
 
-*Error occurred during: ${error.message.includes('ENOENT') ? 'Path validation' : error.message.includes('API key') ? 'API key validation' : 'Dynamic expert analysis'}*`,
+*Error occurred during: ${error.message.includes("ENOENT") ? "Path validation" : error.message.includes("API key") ? "API key validation" : "Dynamic expert analysis"}*`,
             },
           ],
           isError: true,
@@ -1492,45 +1700,62 @@ ${analysis}
 
     case "gemini_codebase_analyzer":
       try {
-        const params = GeminiCodebaseAnalyzerSchema.parse(request.params.arguments);
-        
-        // Get project path from workspace manager
-        const projectPath = workspaceManager.getWorkspacePath();
-        
+        const params = GeminiCodebaseAnalyzerSchema.parse(
+          request.params.arguments,
+        );
+
+        // Get project path from current working directory
+        const projectPath = process.cwd();
+
         // Resolve API keys from multiple sources
         const apiKeys = resolveApiKeys(params);
-        
+
         if (apiKeys.length === 0) {
-          throw new Error("At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey");
+          throw new Error(
+            "At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey",
+          );
         }
 
         // Token limit safety check
         const tokenUsage = await calculateTokenUsageForProject(projectPath);
         if (tokenUsage.totalTokens > 2000000) {
-          throw new Error(`⚠️ Proje çok büyük! Token sayısı: ${tokenUsage.totalTokens.toLocaleString()}. Lütfen 'project_orchestrator_create' ve 'project_orchestrator_analyze' araçlarını kullanın.`);
+          throw new Error(
+            `⚠️ Proje çok büyük! Token sayısı: ${tokenUsage.totalTokens.toLocaleString()}. Lütfen 'project_orchestrator_create' ve 'project_orchestrator_analyze' araçlarını kullanın.`,
+          );
         }
+
+        // Normalize the project path
+        const normalizedPath = normalizeProjectPath(projectPath);
 
         // Validate project path exists (with better error handling)
         let stats;
         try {
-          stats = await fs.stat(projectPath);
+          stats = await fs.stat(normalizedPath);
         } catch (error: any) {
-          if (error.code === 'ENOENT') {
-            throw new Error(`ENOENT: no such file or directory, stat '${projectPath}' - Workspace not found`);
+          if (error.code === "ENOENT") {
+            throw new Error(
+              `ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${projectPath}')`,
+            );
           }
           throw new Error(`Failed to access project path: ${error.message}`);
         }
-        
+
         if (!stats.isDirectory()) {
           throw new Error(`Project path is not a directory: ${normalizedPath}`);
         }
 
         // Prepare project context using normalized path and temporary ignore patterns
-        const fullContext = await prepareFullContext(normalizedPath, params.temporaryIgnore);
-        
+        const fullContext = await prepareFullContext(
+          normalizedPath,
+          params.temporaryIgnore,
+        );
+
         if (fullContext.length === 0) {
           throw new Error("No readable files found in the project directory");
         }
+
+        // Set default analysis mode
+        const analysisMode = "comprehensive";
 
         // General system prompt for all analyses
         const systemPrompt = `You are a senior AI Software Engineer and consultant with full access to an entire software project codebase. Your task is to analyze the complete project context and a specific question from another coding AI, providing the clearest and most accurate answer to help that AI.
@@ -1562,26 +1787,26 @@ ${params.question}`;
         // Send to Gemini AI with API key rotation for rate limits
         const createModelFn = (apiKey: string) => {
           const genAI = new GoogleGenerativeAI(apiKey);
-          return genAI.getGenerativeModel({ 
+          return genAI.getGenerativeModel({
             model: "gemini-2.5-pro",
             generationConfig: {
               maxOutputTokens: 65536,
               temperature: 0.5,
               topK: 40,
               topP: 0.95,
-            }
+            },
           });
         };
 
-        const result = await retryWithApiKeyRotation(
+        const result = (await retryWithApiKeyRotation(
           createModelFn,
           (model) => model.generateContent(megaPrompt),
-          apiKeys
-        ) as any;
+          apiKeys,
+        )) as any;
         const response = await result.response;
         const analysis = response.text();
 
-        const filesProcessed = fullContext.split('--- File:').length - 1;
+        const filesProcessed = fullContext.split("--- File:").length - 1;
 
         return {
           content: [
@@ -1589,7 +1814,7 @@ ${params.question}`;
               type: "text",
               text: `# Gemini Codebase Analysis Results
 
-## Project: ${params.projectPath}
+## Project: ${projectPath}
 *Normalized Path:* ${normalizedPath}
 
 **Question:** ${params.question}
@@ -1611,31 +1836,32 @@ ${analysis}
           ],
         };
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
         let troubleshootingTips = [];
-        
+
         // Provide specific tips based on error type
-        if (errorMessage.includes('ENOENT')) {
+        if (errorMessage.includes("ENOENT")) {
           troubleshootingTips = [
             "✗ **Path Error**: The specified directory doesn't exist or isn't accessible",
             "• Check the path spelling and ensure it exists",
             "• For WSL/Linux paths, use absolute paths starting with /",
             "• For Windows paths, try converting to WSL format",
-            `• Attempted path: ${(error as any)?.path || 'unknown'}`
+            `• Attempted path: ${(error as any)?.path || "unknown"}`,
           ];
-        } else if (errorMessage.includes('API key')) {
+        } else if (errorMessage.includes("API key")) {
           troubleshootingTips = [
             "✗ **API Key Error**: Invalid or missing Gemini API key",
             "• Get your key from [Google AI Studio](https://makersuite.google.com/app/apikey)",
             "• Configure it in Smithery during installation",
-            "• Or pass it as geminiApiKey parameter"
+            "• Or pass it as geminiApiKey parameter",
           ];
-        } else if (errorMessage.includes('timeout')) {
+        } else if (errorMessage.includes("timeout")) {
           troubleshootingTips = [
             "✗ **Timeout Error**: Request took too long",
             "• Try with a smaller project directory",
             "• Check your internet connection",
-            "• Reduce the scope of your question"
+            "• Reduce the scope of your question",
           ];
         } else {
           troubleshootingTips = [
@@ -1643,7 +1869,7 @@ ${analysis}
             "• Verify the project path exists and is accessible",
             "• Ensure your Gemini API key is valid",
             "• Check that the project directory contains readable files",
-            "• Try with a smaller project or more specific question"
+            "• Try with a smaller project or more specific question",
           ];
         }
 
@@ -1657,7 +1883,7 @@ ${analysis}
 
 ### Troubleshooting Guide
 
-${troubleshootingTips.join('\n')}
+${troubleshootingTips.join("\n")}
 
 ---
 
@@ -1666,7 +1892,7 @@ ${troubleshootingTips.join('\n')}
 - Ensure the project path is accessible to the server
 - Try with a simpler question or smaller project
 
-*Error occurred during: ${errorMessage.includes('ENOENT') ? 'Path validation' : errorMessage.includes('API key') ? 'API key validation' : 'AI analysis'}*`,
+*Error occurred during: ${errorMessage.includes("ENOENT") ? "Path validation" : errorMessage.includes("API key") ? "API key validation" : "AI analysis"}*`,
             },
           ],
           isError: true,
@@ -1676,15 +1902,18 @@ ${troubleshootingTips.join('\n')}
     case "gemini_code_search":
       try {
         const params = GeminiCodeSearchSchema.parse(request.params.arguments);
-        
-        // Normalize Windows paths to WSL/Linux format  
-        const normalizedPath = normalizeProjectPath(params.projectPath);
-        
+
+        // Get project path from current working directory
+        const projectPath = process.cwd();
+        const normalizedPath = normalizeProjectPath(projectPath);
+
         // Resolve API keys from multiple sources
         const apiKeys = resolveApiKeys(params);
-        
+
         if (apiKeys.length === 0) {
-          throw new Error("At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey");
+          throw new Error(
+            "At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey",
+          );
         }
 
         // Validate normalized project path exists
@@ -1692,12 +1921,14 @@ ${troubleshootingTips.join('\n')}
         try {
           stats = await fs.stat(normalizedPath);
         } catch (error: any) {
-          if (error.code === 'ENOENT') {
-            throw new Error(`ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${params.projectPath}')`);
+          if (error.code === "ENOENT") {
+            throw new Error(
+              `ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${projectPath}')`,
+            );
           }
           throw new Error(`Failed to access project path: ${error.message}`);
         }
-        
+
         if (!stats.isDirectory()) {
           throw new Error(`Project path is not a directory: ${normalizedPath}`);
         }
@@ -1705,13 +1936,13 @@ ${troubleshootingTips.join('\n')}
         // Find relevant code snippets
         const maxResults = params.maxResults || 5;
         const searchResult = await findRelevantCodeSnippets(
-          normalizedPath, 
-          params.searchQuery, 
-          params.fileTypes, 
+          normalizedPath,
+          params.searchQuery,
+          params.fileTypes,
           maxResults,
-          params.temporaryIgnore
+          params.temporaryIgnore,
         );
-        
+
         if (searchResult.snippets.length === 0) {
           return {
             content: [
@@ -1720,7 +1951,7 @@ ${troubleshootingTips.join('\n')}
                 text: `# Gemini Code Search Results
 
 ## Search Query: "${params.searchQuery}"
-**Project:** ${params.projectPath}
+**Project:** ${projectPath}
 **Files Scanned:** ${searchResult.totalFiles}
 **Results Found:** 0
 
@@ -1740,11 +1971,11 @@ The search didn't find any relevant code snippets matching your query. Try:
         }
 
         // Prepare context from relevant snippets
-        let searchContext = '';
+        let searchContext = "";
         for (const snippet of searchResult.snippets) {
           searchContext += `--- File: ${snippet.file} (${snippet.relevance}) ---\n`;
           searchContext += snippet.content;
-          searchContext += '\n\n';
+          searchContext += "\n\n";
         }
 
         const searchPrompt = `You are a senior AI Software Engineer analyzing specific code snippets from a project. Your task is to help another coding AI understand the most relevant parts of the codebase related to their search query.
@@ -1769,27 +2000,27 @@ RESPONSE FORMAT:
 - Focus on answering the search query specifically`;
 
         // Validate token limit before sending to Gemini 2.5 Pro
-        validateTokenLimit(searchContext, '', params.searchQuery);
+        validateTokenLimit(searchContext, "", params.searchQuery);
 
         // Send to Gemini AI with API key rotation for rate limits
         const createModelFn = (apiKey: string) => {
           const genAI = new GoogleGenerativeAI(apiKey);
-          return genAI.getGenerativeModel({ 
+          return genAI.getGenerativeModel({
             model: "gemini-2.5-pro",
             generationConfig: {
               maxOutputTokens: 65536,
               temperature: 0.5,
               topK: 40,
               topP: 0.95,
-            }
+            },
           });
         };
 
-        const result = await retryWithApiKeyRotation(
+        const result = (await retryWithApiKeyRotation(
           createModelFn,
           (model) => model.generateContent(searchPrompt),
-          apiKeys
-        ) as any;
+          apiKeys,
+        )) as any;
         const response = await result.response;
         const analysis = response.text();
 
@@ -1800,7 +2031,7 @@ RESPONSE FORMAT:
               text: `# Gemini Code Search Results
 
 ## Search Query: "${params.searchQuery}"
-**Project:** ${params.projectPath}
+**Project:** ${projectPath}
 *Normalized Path:* ${normalizedPath}
 
 **Files Scanned:** ${searchResult.totalFiles}  
@@ -1817,7 +2048,7 @@ ${analysis}
 
 ### Search Summary
 - **Query:** ${params.searchQuery}
-- **File Types:** ${params.fileTypes?.join(', ') || 'All files'}
+- **File Types:** ${params.fileTypes?.join(", ") || "All files"}
 - **Max Results:** ${maxResults}
 - **Found:** ${searchResult.snippets.length} relevant code snippets
 
@@ -1826,31 +2057,32 @@ ${analysis}
           ],
         };
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
         let troubleshootingTips = [];
-        
+
         // Provide specific tips based on error type
-        if (errorMessage.includes('ENOENT')) {
+        if (errorMessage.includes("ENOENT")) {
           troubleshootingTips = [
             "✗ **Path Error**: The specified directory doesn't exist or isn't accessible",
             "• Check the path spelling and ensure it exists",
             "• For WSL/Linux paths, use absolute paths starting with /",
             "• For Windows paths, try converting to WSL format",
-            `• Attempted path: ${(error as any)?.path || 'unknown'}`
+            `• Attempted path: ${(error as any)?.path || "unknown"}`,
           ];
-        } else if (errorMessage.includes('API key')) {
+        } else if (errorMessage.includes("API key")) {
           troubleshootingTips = [
             "✗ **API Key Error**: Invalid or missing Gemini API key",
             "• Get your key from [Google AI Studio](https://makersuite.google.com/app/apikey)",
             "• Configure it in Smithery during installation",
-            "• Or pass it as geminiApiKey parameter"
+            "• Or pass it as geminiApiKey parameter",
           ];
-        } else if (errorMessage.includes('search')) {
+        } else if (errorMessage.includes("search")) {
           troubleshootingTips = [
             "✗ **Search Error**: Problem during code search",
             "• Try with a simpler search query",
             "• Check if the project directory is accessible",
-            "• Verify file types are correct (e.g., ['.ts', '.js'])"
+            "• Verify file types are correct (e.g., ['.ts', '.js'])",
           ];
         } else {
           troubleshootingTips = [
@@ -1858,7 +2090,7 @@ ${analysis}
             "• Verify the project path exists and is accessible",
             "• Ensure your Gemini API key is valid",
             "• Try with a simpler search query",
-            "• Check that the project directory contains readable files"
+            "• Check that the project directory contains readable files",
           ];
         }
 
@@ -1872,7 +2104,7 @@ ${analysis}
 
 ### Troubleshooting Guide
 
-${troubleshootingTips.join('\n')}
+${troubleshootingTips.join("\n")}
 
 ---
 
@@ -1881,7 +2113,7 @@ ${troubleshootingTips.join('\n')}
 - Ensure the project path is accessible to the server
 - Try with a simpler search query or use the comprehensive analyzer
 
-*Error occurred during: ${errorMessage.includes('ENOENT') ? 'Path validation' : errorMessage.includes('API key') ? 'API key validation' : errorMessage.includes('search') ? 'Code search' : 'AI analysis'}*`,
+*Error occurred during: ${errorMessage.includes("ENOENT") ? "Path validation" : errorMessage.includes("API key") ? "API key validation" : errorMessage.includes("search") ? "Code search" : "AI analysis"}*`,
             },
           ],
           isError: true,
@@ -1890,13 +2122,18 @@ ${troubleshootingTips.join('\n')}
 
     case "read_log_file":
       try {
-        logger.info('Received request to read log file', { filename: request.params.arguments?.filename });
-        
+        logger.info("Received request to read log file", {
+          filename: request.params.arguments?.filename,
+        });
+
         const params = ReadLogFileSchema.parse(request.params.arguments);
         const logContent = await readLogFileLogic(params.filename);
-        
-        logger.info('Log file read successfully', { filename: params.filename, contentLength: logContent.length });
-        
+
+        logger.info("Log file read successfully", {
+          filename: params.filename,
+          contentLength: logContent.length,
+        });
+
         return {
           content: [
             {
@@ -1924,7 +2161,7 @@ ${logContent}
           isError: false,
         };
       } catch (error: any) {
-        logger.error('Error in read_log_file tool', { error: error.message });
+        logger.error("Error in read_log_file tool", { error: error.message });
         return {
           content: [
             {
@@ -1949,16 +2186,21 @@ ${logContent}
 
     case "project_orchestrator_create":
       try {
-        const params = ProjectOrchestratorCreateSchema.parse(request.params.arguments);
-        
-        // Get project path from workspace manager
-        const projectPath = workspaceManager.getWorkspacePath();
-        
+        const params = ProjectOrchestratorCreateSchema.parse(
+          request.params.arguments,
+        );
+
+        // Get project path from current working directory
+        const projectPath = process.cwd();
+        const normalizedPath = normalizeProjectPath(projectPath);
+
         // Resolve API keys from multiple sources
         const apiKeys = resolveApiKeys(params);
-        
+
         if (apiKeys.length === 0) {
-          throw new Error("At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey");
+          throw new Error(
+            "At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey",
+          );
         }
 
         // Validate normalized project path exists
@@ -1966,12 +2208,14 @@ ${logContent}
         try {
           stats = await fs.stat(normalizedPath);
         } catch (error: any) {
-          if (error.code === 'ENOENT') {
-            throw new Error(`ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${params.projectPath}')`);
+          if (error.code === "ENOENT") {
+            throw new Error(
+              `ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${projectPath}')`,
+            );
           }
           throw new Error(`Failed to access project path: ${error.message}`);
         }
-        
+
         if (!stats.isDirectory()) {
           throw new Error(`Project path is not a directory: ${normalizedPath}`);
         }
@@ -1981,12 +2225,12 @@ ${logContent}
         // Get all files with token information
         let gitignoreRules: string[] = [];
         try {
-          const gitignorePath = path.join(normalizedPath, '.gitignore');
-          const gitignoreContent = await fs.readFile(gitignorePath, 'utf-8');
+          const gitignorePath = path.join(normalizedPath, ".gitignore");
+          const gitignoreContent = await fs.readFile(gitignorePath, "utf-8");
           gitignoreRules = gitignoreContent
-            .split('\n')
-            .map(line => line.trim())
-            .filter(line => line && !line.startsWith('#'));
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith("#"));
         } catch (error) {
           // No .gitignore file, continue
         }
@@ -1994,30 +2238,30 @@ ${logContent}
         const allIgnorePatterns = [
           ...gitignoreRules,
           ...(params.temporaryIgnore || []),
-          'node_modules/**',
-          '.git/**',
-          '*.log',
-          '.env*',
-          'dist/**',
-          'build/**',
-          '*.map',
-          '*.lock',
-          '.cache/**',
-          'coverage/**',
-          'logs/**' // Don't include our own logs
+          "node_modules/**",
+          ".git/**",
+          "*.log",
+          ".env*",
+          "dist/**",
+          "build/**",
+          "*.map",
+          "*.lock",
+          ".cache/**",
+          "coverage/**",
+          "logs/**", // Don't include our own logs
         ];
 
         // Scan all files
-        const files = await glob('**/*', {
+        const files = await glob("**/*", {
           cwd: normalizedPath,
           ignore: allIgnorePatterns,
-          nodir: true
+          nodir: true,
         });
 
         // Calculate tokens for each file
         const fileTokenInfos: FileTokenInfo[] = [];
         let totalProjectTokens = 0;
-        
+
         for (const file of files) {
           const fileInfo = await getFileTokenInfo(normalizedPath, file);
           if (fileInfo) {
@@ -2027,24 +2271,32 @@ ${logContent}
         }
 
         // Create file groups for large projects using AI
-        const groups = await createFileGroupsWithAI(fileTokenInfos, maxTokensPerGroup, apiKeys, "General project analysis");
-        
+        const groups = await createFileGroupsWithAI(
+          fileTokenInfos,
+          maxTokensPerGroup,
+          apiKeys,
+          "General project analysis",
+        );
+
         // Serialize groups data for step 2
         const groupsData = JSON.stringify({
-          groups: groups.map(g => ({
-            files: g.files.map(f => ({ filePath: f.filePath, tokens: f.tokens })),
+          groups: groups.map((g) => ({
+            files: g.files.map((f) => ({
+              filePath: f.filePath,
+              tokens: f.tokens,
+            })),
             totalTokens: g.totalTokens,
             groupIndex: g.groupIndex,
             name: g.name,
             description: g.description,
             reasoning: g.reasoning,
-            customPrompt: g.customPrompt
+            customPrompt: g.customPrompt,
           })),
           totalFiles: fileTokenInfos.length,
           totalTokens: totalProjectTokens,
           projectPath: normalizedPath,
           analysisMode: params.analysisMode,
-          maxTokensPerGroup: maxTokensPerGroup
+          maxTokensPerGroup: maxTokensPerGroup,
         });
 
         return {
@@ -2053,7 +2305,7 @@ ${logContent}
               type: "text",
               text: `# Project Orchestrator Groups Created Successfully!
 
-## Project: ${params.projectPath}
+## Project: ${projectPath}
 *Normalized Path:* ${normalizedPath}
 
 **Total Files:** ${fileTokenInfos.length}  
@@ -2065,23 +2317,30 @@ ${logContent}
 
 ## 📦 **File Groups Created:**
 
-${groups.map((group, index) => `### Group ${index + 1}${group.name ? ` - ${group.name}` : ''}
+${groups
+  .map(
+    (
+      group,
+      index,
+    ) => `### Group ${index + 1}${group.name ? ` - ${group.name}` : ""}
 - **Files:** ${group.files.length}
 - **Tokens:** ${group.totalTokens.toLocaleString()}
-${group.description ? `- **Description:** ${group.description}` : ''}
-${group.reasoning ? `- **AI Reasoning:** ${group.reasoning}` : ''}
-${group.customPrompt ? `- **🎯 Custom Expert:** ${group.customPrompt.substring(0, 150)}...` : ''}
+${group.description ? `- **Description:** ${group.description}` : ""}
+${group.reasoning ? `- **AI Reasoning:** ${group.reasoning}` : ""}
+${group.customPrompt ? `- **🎯 Custom Expert:** ${group.customPrompt.substring(0, 150)}...` : ""}
 
 **Files in this group:**
-${group.files.map(f => `  - ${f.filePath} (${f.tokens} tokens)`).join('\n')}
+${group.files.map((f) => `  - ${f.filePath} (${f.tokens} tokens)`).join("\n")}
 
----`).join('\n')}
+---`,
+  )
+  .join("\n")}
 
 ## 📋 **Next Steps:**
 
 1. **Copy the groups data below** (the entire JSON between the backticks)
 2. **Use the 'project_orchestrator_analyze' tool** with:
-   - Same project path: \`${params.projectPath}\`
+   - Same project path: \`${projectPath}\`
    - Your specific question
    - Same analysis mode: \`${params.analysisMode}\`
    - The groups data you just copied
@@ -2124,7 +2383,7 @@ ${groupsData}
 - Ensure the project path is accessible to the server
 - Try with a simpler project structure first
 
-*Error occurred during: ${error.message.includes('ENOENT') ? 'Path validation' : error.message.includes('API key') ? 'API key validation' : 'Groups creation'}*`,
+*Error occurred during: ${error.message.includes("ENOENT") ? "Path validation" : error.message.includes("API key") ? "API key validation" : "Groups creation"}*`,
             },
           ],
           isError: true,
@@ -2133,16 +2392,21 @@ ${groupsData}
 
     case "project_orchestrator_analyze":
       try {
-        const params = ProjectOrchestratorAnalyzeSchema.parse(request.params.arguments);
-        
-        // Get project path from workspace manager
-        const projectPath = workspaceManager.getWorkspacePath();
-        
+        const params = ProjectOrchestratorAnalyzeSchema.parse(
+          request.params.arguments,
+        );
+
+        // Get project path from current working directory
+        const projectPath = process.cwd();
+        const normalizedPath = normalizeProjectPath(projectPath);
+
         // Resolve API keys from multiple sources
         const apiKeys = resolveApiKeys(params);
-        
+
         if (apiKeys.length === 0) {
-          throw new Error("At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey");
+          throw new Error(
+            "At least one Gemini API key is required. Provide geminiApiKey, geminiApiKeys array, or set GEMINI_API_KEY environment variable. Get your key from https://makersuite.google.com/app/apikey",
+          );
         }
 
         // Parse groups data from step 1
@@ -2150,7 +2414,9 @@ ${groupsData}
         try {
           groupsData = JSON.parse(params.fileGroupsData);
         } catch (error) {
-          throw new Error("Invalid groups data JSON. Please ensure you copied the complete groups data from project_orchestrator_create step.");
+          throw new Error(
+            "Invalid groups data JSON. Please ensure you copied the complete groups data from project_orchestrator_create step.",
+          );
         }
 
         // Validate normalized project path exists
@@ -2158,12 +2424,14 @@ ${groupsData}
         try {
           stats = await fs.stat(normalizedPath);
         } catch (error: any) {
-          if (error.code === 'ENOENT') {
-            throw new Error(`ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${params.projectPath}')`);
+          if (error.code === "ENOENT") {
+            throw new Error(
+              `ENOENT: no such file or directory, stat '${normalizedPath}' (original: '${projectPath}')`,
+            );
           }
           throw new Error(`Failed to access project path: ${error.message}`);
         }
-        
+
         if (!stats.isDirectory()) {
           throw new Error(`Project path is not a directory: ${normalizedPath}`);
         }
@@ -2172,24 +2440,24 @@ ${groupsData}
         const groups: FileGroup[] = [];
         for (const groupData of groupsData.groups) {
           const files: FileTokenInfo[] = [];
-          
+
           for (const fileData of groupData.files) {
             try {
               const filePath = path.join(normalizedPath, fileData.filePath);
-              const content = await fs.readFile(filePath, 'utf-8');
+              const content = await fs.readFile(filePath, "utf-8");
               files.push({
                 filePath: fileData.filePath,
                 tokens: fileData.tokens,
-                content: content
+                content: content,
               });
             } catch (error) {
-              logger.warn('Failed to read file during analysis', { 
-                filePath: fileData.filePath, 
-                error: error instanceof Error ? error.message : 'Unknown error' 
+              logger.warn("Failed to read file during analysis", {
+                filePath: fileData.filePath,
+                error: error instanceof Error ? error.message : "Unknown error",
               });
             }
           }
-          
+
           groups.push({
             files: files,
             totalTokens: groupData.totalTokens,
@@ -2197,35 +2465,41 @@ ${groupsData}
             name: groupData.name,
             description: groupData.description,
             reasoning: groupData.reasoning,
-            customPrompt: groupData.customPrompt
+            customPrompt: groupData.customPrompt,
           });
         }
 
         // Analyze each group in parallel with delay
         const fallbackPrompt = `You are a general software analysis AI. Analyze the provided files.`;
-        
+
         // Create async function for each group analysis
-        const analyzeGroup = async (group: FileGroup, index: number, delayMs: number = 0): Promise<string> => {
+        const analyzeGroup = async (
+          group: FileGroup,
+          index: number,
+          delayMs: number = 0,
+        ): Promise<string> => {
           // Add delay to prevent API rate limiting
           if (delayMs > 0) {
-            await new Promise(resolve => setTimeout(resolve, delayMs));
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
           }
-          
+
           try {
-            const groupContext = group.files.map(f => `--- File: ${f.filePath} ---\n${f.content}`).join('\n\n');
-            
+            const groupContext = group.files
+              .map((f) => `--- File: ${f.filePath} ---\n${f.content}`)
+              .join("\n\n");
+
             // Use custom prompt if available, otherwise fallback to system prompt
             const effectivePrompt = group.customPrompt || fallbackPrompt;
-            
+
             const groupPrompt = `${effectivePrompt}
 
 **GROUP CONTEXT (${index + 1}/${groups.length}):**
-This is group ${index + 1} of ${groups.length} from a large project analysis. ${group.name ? `Group Name: "${group.name}"` : ''} ${group.description ? `Group Description: ${group.description}` : ''}
+This is group ${index + 1} of ${groups.length} from a large project analysis. ${group.name ? `Group Name: "${group.name}"` : ""} ${group.description ? `Group Description: ${group.description}` : ""}
 
-${group.reasoning ? `**AI Grouping Reasoning:** ${group.reasoning}` : ''}
+${group.reasoning ? `**AI Grouping Reasoning:** ${group.reasoning}` : ""}
 
 Files in this group:
-${group.files.map(f => `- ${f.filePath} (${f.tokens} tokens)`).join('\n')}
+${group.files.map((f) => `- ${f.filePath} (${f.tokens} tokens)`).join("\n")}
 
 **PROJECT SUBSET:**
 ${groupContext}
@@ -2236,40 +2510,46 @@ ${params.question}
 Please analyze this subset of the project in the context of the user's question. ${group.name ? `Focus on the "${group.name}" aspect as this group was specifically created for that purpose.` : `Remember this is part ${index + 1} of ${groups.length} total parts.`}`;
 
             const groupResult = await retryWithApiKeyRotation(
-              (apiKey: string) => new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: "gemini-2.5-pro" }),
+              (apiKey: string) =>
+                new GoogleGenerativeAI(apiKey).getGenerativeModel({
+                  model: "gemini-2.5-pro",
+                }),
               async (model) => model.generateContent(groupPrompt),
-              apiKeys
+              apiKeys,
             );
 
             const groupResponse = await groupResult.response;
             const groupAnalysis = groupResponse.text();
-            
-            logger.info('Completed group analysis', {
-              groupIndex: index + 1,
-              responseLength: groupAnalysis.length
-            });
-            
-            return groupAnalysis;
 
-          } catch (error) {
-            logger.error('Failed to analyze group', {
+            logger.info("Completed group analysis", {
               groupIndex: index + 1,
-              error: error instanceof Error ? error.message : 'Unknown error'
+              responseLength: groupAnalysis.length,
             });
-            return `**Group ${index + 1} Analysis Failed:** ${error instanceof Error ? error.message : 'Unknown error'}`;
+
+            return groupAnalysis;
+          } catch (error) {
+            logger.error("Failed to analyze group", {
+              groupIndex: index + 1,
+              error: error instanceof Error ? error.message : "Unknown error",
+            });
+            return `**Group ${index + 1} Analysis Failed:** ${error instanceof Error ? error.message : "Unknown error"}`;
           }
         };
 
         // Launch all group analyses in parallel with staggered delays
-        const groupPromises = groups.map((group, index) => 
-          analyzeGroup(group, index, index * 700) // 0.7 second delay between each group
+        const groupPromises = groups.map(
+          (group, index) => analyzeGroup(group, index, index * 700), // 0.7 second delay between each group
         );
 
         // Wait for all analyses to complete
         const groupResults = await Promise.all(groupPromises);
 
         // Aggregate all results
-        const finalAnalysis = aggregateAnalysisResults(groupResults, params.question, params.analysisMode);
+        const finalAnalysis = aggregateAnalysisResults(
+          groupResults,
+          params.question,
+          params.analysisMode,
+        );
 
         return {
           content: [
@@ -2277,7 +2557,7 @@ Please analyze this subset of the project in the context of the user's question.
               type: "text",
               text: `# Project Orchestrator Analysis Results
 
-## Project: ${params.projectPath}
+## Project: ${projectPath}
 *Normalized Path:* ${normalizedPath}
 
 **Question:** ${params.question}
@@ -2301,7 +2581,7 @@ ${finalAnalysis}
 **API Keys Used:** ${apiKeys.length}  
 
 ### Group Breakdown
-${groups.map((group, index) => `- **Group ${index + 1}${group.name ? ` (${group.name})` : ''}**: ${group.files.length} files, ${group.totalTokens.toLocaleString()} tokens${group.description ? ` - ${group.description}` : ''}`).join('\n')}
+${groups.map((group, index) => `- **Group ${index + 1}${group.name ? ` (${group.name})` : ""}**: ${group.files.length} files, ${group.totalTokens.toLocaleString()} tokens${group.description ? ` - ${group.description}` : ""}`).join("\n")}
 
 ---
 
@@ -2336,48 +2616,51 @@ ${groups.map((group, index) => `- **Group ${index + 1}${group.name ? ` (${group.
 - Make sure you used the complete groups data from 'project_orchestrator_create'
 - Try with a simpler question or smaller project
 
-*Error occurred during: ${error.message.includes('ENOENT') ? 'Path validation' : error.message.includes('API key') ? 'API key validation' : error.message.includes('JSON') ? 'Groups data parsing' : 'Orchestrator analysis'}*`,
+*Error occurred during: ${error.message.includes("ENOENT") ? "Path validation" : error.message.includes("API key") ? "API key validation" : error.message.includes("JSON") ? "Groups data parsing" : "Orchestrator analysis"}*`,
             },
           ],
           isError: true,
         };
       }
 
-
-
     default:
-      logger.warn('Unknown tool called', { toolName: request.params.name });
+      logger.warn("Unknown tool called", { toolName: request.params.name });
       throw new Error(`Unknown tool: ${request.params.name}`);
   }
 });
 
 // Helper function for smart code search - finds relevant code snippets
 async function findRelevantCodeSnippets(
-  projectPath: string, 
-  searchQuery: string, 
-  fileTypes?: string[], 
+  projectPath: string,
+  searchQuery: string,
+  fileTypes?: string[],
   maxResults: number = 5,
-  temporaryIgnore: string[] = []
-): Promise<{ snippets: Array<{file: string, content: string, relevance: string}>, totalFiles: number }> {
+  temporaryIgnore: string[] = [],
+): Promise<{
+  snippets: Array<{ file: string; content: string; relevance: string }>;
+  totalFiles: number;
+}> {
   try {
     let gitignoreRules: string[] = [];
-    
+
     // Read .gitignore file if it exists
     try {
-      const gitignorePath = path.join(projectPath, '.gitignore');
-      const gitignoreContent = await fs.readFile(gitignorePath, 'utf-8');
+      const gitignorePath = path.join(projectPath, ".gitignore");
+      const gitignoreContent = await fs.readFile(gitignorePath, "utf-8");
       gitignoreRules = gitignoreContent
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line && !line.startsWith('#'));
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
     } catch (error) {
       // No .gitignore file, continue
     }
 
     // Build file pattern based on fileTypes
-    let patterns = ['**/*'];
+    let patterns = ["**/*"];
     if (fileTypes && fileTypes.length > 0) {
-      patterns = fileTypes.map(ext => `**/*${ext.startsWith('.') ? ext : '.' + ext}`);
+      patterns = fileTypes.map(
+        (ext) => `**/*${ext.startsWith(".") ? ext : "." + ext}`,
+      );
     }
 
     let allFiles: string[] = [];
@@ -2387,18 +2670,18 @@ async function findRelevantCodeSnippets(
         ignore: [
           ...gitignoreRules,
           ...temporaryIgnore, // Add temporary ignore patterns
-          'node_modules/**',
-          '.git/**',
-          '*.log',
-          '.env*',
-          'dist/**',
-          'build/**',
-          '*.map',
-          '*.lock',
-          '.cache/**',
-          'coverage/**'
+          "node_modules/**",
+          ".git/**",
+          "*.log",
+          ".env*",
+          "dist/**",
+          "build/**",
+          "*.map",
+          "*.lock",
+          ".cache/**",
+          "coverage/**",
         ],
-        nodir: true
+        nodir: true,
       });
       allFiles.push(...files);
     }
@@ -2406,32 +2689,38 @@ async function findRelevantCodeSnippets(
     // Remove duplicates
     allFiles = [...new Set(allFiles)];
 
-    const relevantSnippets: Array<{file: string, content: string, relevance: string}> = [];
-    
+    const relevantSnippets: Array<{
+      file: string;
+      content: string;
+      relevance: string;
+    }> = [];
+
     // Simple keyword-based relevance scoring (can be enhanced with embeddings later)
     const searchTerms = searchQuery.toLowerCase().split(/\s+/);
-    
-    for (const file of allFiles.slice(0, 50)) { // Limit files to process for performance
+
+    for (const file of allFiles.slice(0, 50)) {
+      // Limit files to process for performance
       try {
         const filePath = path.join(projectPath, file);
-        const content = await fs.readFile(filePath, 'utf-8');
-        
+        const content = await fs.readFile(filePath, "utf-8");
+
         // Skip very large files
         if (content.length > 100000) continue;
-        
+
         // Calculate relevance score
         const contentLower = content.toLowerCase();
         let score = 0;
         let matchedTerms: string[] = [];
-        
+
         for (const term of searchTerms) {
-          const matches = (contentLower.match(new RegExp(term, 'g')) || []).length;
+          const matches = (contentLower.match(new RegExp(term, "g")) || [])
+            .length;
           if (matches > 0) {
             score += matches;
             matchedTerms.push(term);
           }
         }
-        
+
         // Boost score for files with terms in filename
         const fileLower = file.toLowerCase();
         for (const term of searchTerms) {
@@ -2440,12 +2729,15 @@ async function findRelevantCodeSnippets(
             matchedTerms.push(`${term} (in filename)`);
           }
         }
-        
+
         if (score > 0) {
           relevantSnippets.push({
             file,
-            content: content.length > 5000 ? content.substring(0, 5000) + '\n...(truncated)' : content,
-            relevance: `Score: ${score}, Matched: ${[...new Set(matchedTerms)].join(', ')}`
+            content:
+              content.length > 5000
+                ? content.substring(0, 5000) + "\n...(truncated)"
+                : content,
+            relevance: `Score: ${score}, Matched: ${[...new Set(matchedTerms)].join(", ")}`,
           });
         }
       } catch (error) {
@@ -2456,14 +2748,14 @@ async function findRelevantCodeSnippets(
 
     // Sort by relevance score and take top results
     relevantSnippets.sort((a, b) => {
-      const scoreA = parseInt(a.relevance.match(/Score: (\d+)/)?.[1] || '0');
-      const scoreB = parseInt(b.relevance.match(/Score: (\d+)/)?.[1] || '0');
+      const scoreA = parseInt(a.relevance.match(/Score: (\d+)/)?.[1] || "0");
+      const scoreB = parseInt(b.relevance.match(/Score: (\d+)/)?.[1] || "0");
       return scoreB - scoreA;
     });
 
     return {
       snippets: relevantSnippets.slice(0, maxResults),
-      totalFiles: allFiles.length
+      totalFiles: allFiles.length,
     };
   } catch (error) {
     throw new Error(`Failed to search codebase: ${error}`);
@@ -2471,18 +2763,21 @@ async function findRelevantCodeSnippets(
 }
 
 // Helper function to prepare full context
-async function prepareFullContext(projectPath: string, temporaryIgnore: string[] = []): Promise<string> {
+async function prepareFullContext(
+  projectPath: string,
+  temporaryIgnore: string[] = [],
+): Promise<string> {
   try {
     let gitignoreRules: string[] = [];
-    
+
     // Read .gitignore file if it exists
     try {
-      const gitignorePath = path.join(projectPath, '.gitignore');
-      const gitignoreContent = await fs.readFile(gitignorePath, 'utf-8');
+      const gitignorePath = path.join(projectPath, ".gitignore");
+      const gitignoreContent = await fs.readFile(gitignorePath, "utf-8");
       gitignoreRules = gitignoreContent
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line && !line.startsWith('#'));
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
     } catch (error) {
       // No .gitignore file, continue
     }
@@ -2491,36 +2786,36 @@ async function prepareFullContext(projectPath: string, temporaryIgnore: string[]
     const allIgnorePatterns = [
       ...gitignoreRules,
       ...temporaryIgnore, // Add temporary ignore patterns
-      'node_modules/**',
-      '.git/**',
-      '*.log',
-      '.env*',
-      'dist/**',
-      'build/**',
-      '*.map',
-      '*.lock',
-      '.cache/**',
-      'coverage/**'
+      "node_modules/**",
+      ".git/**",
+      "*.log",
+      ".env*",
+      "dist/**",
+      "build/**",
+      "*.map",
+      "*.lock",
+      ".cache/**",
+      "coverage/**",
     ];
 
     // Scan all files in the project
-    const files = await glob('**/*', {
+    const files = await glob("**/*", {
       cwd: projectPath,
       ignore: allIgnorePatterns,
-      nodir: true
+      nodir: true,
     });
 
-    let fullContext = '';
+    let fullContext = "";
 
     // Read each file and combine content
     for (const file of files) {
       try {
         const filePath = path.join(projectPath, file);
-        const content = await fs.readFile(filePath, 'utf-8');
-        
+        const content = await fs.readFile(filePath, "utf-8");
+
         fullContext += `--- File: ${file} ---\n`;
         fullContext += content;
-        fullContext += '\n\n';
+        fullContext += "\n\n";
       } catch (error) {
         // Skip binary files or unreadable files
         continue;
@@ -2534,20 +2829,22 @@ async function prepareFullContext(projectPath: string, temporaryIgnore: string[]
 }
 
 // Helper function to read log files securely
-async function readLogFileLogic(filename: 'activity.log' | 'error.log'): Promise<string> {
-  const logDir = path.join(process.cwd(), 'logs');
+async function readLogFileLogic(
+  filename: "activity.log" | "error.log",
+): Promise<string> {
+  const logDir = path.join(process.cwd(), "logs");
   const filePath = path.join(logDir, filename);
 
   // Security check: ensure the resolved path is within the logs directory
   if (!path.resolve(filePath).startsWith(path.resolve(logDir))) {
-    throw new Error('Access denied: Invalid log file path.');
+    throw new Error("Access denied: Invalid log file path.");
   }
 
   try {
-    const content = await fs.readFile(filePath, 'utf-8');
+    const content = await fs.readFile(filePath, "utf-8");
     return content;
   } catch (error: any) {
-    if (error.code === 'ENOENT') {
+    if (error.code === "ENOENT") {
       return `Log file '${filename}' not found. It may not have been created yet or the server hasn't logged any data to this file.`;
     }
     throw new Error(`Failed to read log file '${filename}': ${error.message}`);
@@ -2577,60 +2874,69 @@ function calculateFileTokens(content: string): number {
   const basicEstimate = Math.ceil(content.length / 4);
   const newlineCount = (content.match(/\n/g) || []).length;
   const spaceCount = (content.match(/ {2,}/g) || []).length; // Multiple spaces
-  const specialCharsCount = (content.match(/[{}[\]();,.<>\/\\=+\-*&|!@#$%^`~]/g) || []).length;
-  const codeStructuresCount = (content.match(/(function|class|interface|import|export|const|let|var)/g) || []).length;
-  
-  const adjustedEstimate = basicEstimate + 
-    Math.ceil(newlineCount * 0.5) + 
-    Math.ceil(spaceCount * 0.3) + 
+  const specialCharsCount = (
+    content.match(/[{}[\]();,.<>\/\\=+\-*&|!@#$%^`~]/g) || []
+  ).length;
+  const codeStructuresCount = (
+    content.match(/(function|class|interface|import|export|const|let|var)/g) ||
+    []
+  ).length;
+
+  const adjustedEstimate =
+    basicEstimate +
+    Math.ceil(newlineCount * 0.5) +
+    Math.ceil(spaceCount * 0.3) +
     Math.ceil(specialCharsCount * 0.2) +
     Math.ceil(codeStructuresCount * 2); // Code structures are token-heavy
-  
+
   return adjustedEstimate;
 }
 
 // Get file information with token count
-async function getFileTokenInfo(projectPath: string, filePath: string): Promise<FileTokenInfo | null> {
+async function getFileTokenInfo(
+  projectPath: string,
+  filePath: string,
+): Promise<FileTokenInfo | null> {
   try {
     const fullPath = path.join(projectPath, filePath);
-    const content = await fs.readFile(fullPath, 'utf-8');
+    const content = await fs.readFile(fullPath, "utf-8");
     const tokens = calculateFileTokens(content);
-    
+
     return {
       filePath,
       tokens,
-      content
+      content,
     };
   } catch (error) {
-    logger.warn('Failed to read file for token calculation', { 
-      filePath, 
-      error: error instanceof Error ? error.message : 'Unknown error' 
+    logger.warn("Failed to read file for token calculation", {
+      filePath,
+      error: error instanceof Error ? error.message : "Unknown error",
     });
     return null;
   }
 }
 
-// AI-powered intelligent file grouping 
+// AI-powered intelligent file grouping
 async function createFileGroupsWithAI(
-  files: FileTokenInfo[], 
+  files: FileTokenInfo[],
   maxTokensPerGroup: number = 900000,
   apiKeys: string[],
-  question: string
+  question: string,
 ): Promise<FileGroup[]> {
-  logger.info('Starting AI-powered file grouping', {
+  logger.info("Starting AI-powered file grouping", {
     totalFiles: files.length,
     totalTokens: files.reduce((sum, f) => sum + f.tokens, 0),
-    maxTokensPerGroup
+    maxTokensPerGroup,
   });
 
   try {
     // Create file manifest for AI
-    const fileManifest = files.map(f => ({
+    const fileManifest = files.map((f) => ({
       path: f.filePath,
       tokens: f.tokens,
       size: f.content.length,
       extension: path.extname(f.filePath),
-      directory: path.dirname(f.filePath)
+      directory: path.dirname(f.filePath),
     }));
 
     const groupingPrompt = `
@@ -2696,24 +3002,31 @@ async function createFileGroupsWithAI(
     `;
 
     const groupingResult = await retryWithApiKeyRotation(
-      (apiKey: string) => new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: "gemini-2.0-flash-exp" }),
+      (apiKey: string) =>
+        new GoogleGenerativeAI(apiKey).getGenerativeModel({
+          model: "gemini-2.0-flash-exp",
+        }),
       async (model) => model.generateContent(groupingPrompt),
-      apiKeys
+      apiKeys,
     );
 
     const response = await groupingResult.response;
     const aiResponse = response.text();
-    
-    logger.debug('AI grouping response received', { responseLength: aiResponse.length });
+
+    logger.debug("AI grouping response received", {
+      responseLength: aiResponse.length,
+    });
 
     // Extract JSON from response
-    const jsonMatch = aiResponse.match(/```json\n([\s\S]*?)\n```/) || aiResponse.match(/\{[\s\S]*\}/);
+    const jsonMatch =
+      aiResponse.match(/```json\n([\s\S]*?)\n```/) ||
+      aiResponse.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      throw new Error('AI did not return valid JSON for file grouping');
+      throw new Error("AI did not return valid JSON for file grouping");
     }
 
     const groupingData = JSON.parse(jsonMatch[1] || jsonMatch[0]);
-    
+
     // Convert AI groups to our FileGroup format
     const aiGroups: FileGroup[] = [];
     let groupIndex = 0;
@@ -2723,7 +3036,7 @@ async function createFileGroupsWithAI(
       let totalTokens = 0;
 
       for (const filePath of aiGroup.files) {
-        const fileInfo = files.find(f => f.filePath === filePath);
+        const fileInfo = files.find((f) => f.filePath === filePath);
         if (fileInfo) {
           groupFiles.push(fileInfo);
           totalTokens += fileInfo.tokens;
@@ -2732,15 +3045,19 @@ async function createFileGroupsWithAI(
 
       // Validate token limit
       if (totalTokens > maxTokensPerGroup) {
-        logger.warn('AI group exceeds token limit, will split', {
+        logger.warn("AI group exceeds token limit, will split", {
           groupName: aiGroup.name,
           totalTokens,
           maxTokensPerGroup,
-          filesInGroup: groupFiles.length
+          filesInGroup: groupFiles.length,
         });
-        
+
         // Fall back to algorithmic splitting for this group
-        const splitGroups = createFileGroupsAlgorithmic(groupFiles, maxTokensPerGroup, groupIndex);
+        const splitGroups = createFileGroupsAlgorithmic(
+          groupFiles,
+          maxTokensPerGroup,
+          groupIndex,
+        );
         aiGroups.push(...splitGroups);
         groupIndex += splitGroups.length;
       } else {
@@ -2751,74 +3068,89 @@ async function createFileGroupsWithAI(
           name: aiGroup.name,
           description: aiGroup.description,
           reasoning: aiGroup.reasoning,
-          customPrompt: aiGroup.customPrompt
+          customPrompt: aiGroup.customPrompt,
         });
       }
     }
 
     // Handle any files not included in AI groups
-    const includedFiles = new Set(aiGroups.flatMap(g => g.files.map(f => f.filePath)));
-    const remainingFiles = files.filter(f => !includedFiles.has(f.filePath));
-    
+    const includedFiles = new Set(
+      aiGroups.flatMap((g) => g.files.map((f) => f.filePath)),
+    );
+    const remainingFiles = files.filter((f) => !includedFiles.has(f.filePath));
+
     if (remainingFiles.length > 0) {
-      logger.info('Processing remaining files not grouped by AI', { remainingFiles: remainingFiles.length });
-      const remainingGroups = createFileGroupsAlgorithmic(remainingFiles, maxTokensPerGroup, groupIndex);
+      logger.info("Processing remaining files not grouped by AI", {
+        remainingFiles: remainingFiles.length,
+      });
+      const remainingGroups = createFileGroupsAlgorithmic(
+        remainingFiles,
+        maxTokensPerGroup,
+        groupIndex,
+      );
       aiGroups.push(...remainingGroups);
     }
 
-    logger.info('AI-powered file grouping completed', {
+    logger.info("AI-powered file grouping completed", {
       totalGroups: aiGroups.length,
       strategy: groupingData.strategy,
-      averageTokensPerGroup: aiGroups.reduce((sum, g) => sum + g.totalTokens, 0) / aiGroups.length
+      averageTokensPerGroup:
+        aiGroups.reduce((sum, g) => sum + g.totalTokens, 0) / aiGroups.length,
     });
 
     return aiGroups;
-
   } catch (error) {
-    logger.warn('AI grouping failed, falling back to algorithmic grouping', { 
-      error: error instanceof Error ? error.message : 'Unknown error' 
+    logger.warn("AI grouping failed, falling back to algorithmic grouping", {
+      error: error instanceof Error ? error.message : "Unknown error",
     });
-    
+
     // Fallback to algorithmic grouping
     return createFileGroupsAlgorithmic(files, maxTokensPerGroup);
   }
 }
 
 // Fallback algorithmic file grouping (original algorithm)
-function createFileGroupsAlgorithmic(files: FileTokenInfo[], maxTokensPerGroup: number = 900000, startIndex: number = 0): FileGroup[] {
+function createFileGroupsAlgorithmic(
+  files: FileTokenInfo[],
+  maxTokensPerGroup: number = 900000,
+  startIndex: number = 0,
+): FileGroup[] {
   const groups: FileGroup[] = [];
   let currentGroup: FileTokenInfo[] = [];
   let currentTokens = 0;
   let groupIndex = startIndex;
-  
+
   // Sort files by token count (smaller files first for better packing)
   const sortedFiles = [...files].sort((a, b) => a.tokens - b.tokens);
-  
+
   for (const file of sortedFiles) {
     // If this single file exceeds the limit, create a separate group
     if (file.tokens > maxTokensPerGroup) {
-      logger.warn('Large file exceeds group limit', {
+      logger.warn("Large file exceeds group limit", {
         filePath: file.filePath,
         fileTokens: file.tokens,
-        maxTokensPerGroup
+        maxTokensPerGroup,
       });
-      
+
       groups.push({
         files: [file],
         totalTokens: file.tokens,
-        groupIndex: groupIndex++
+        groupIndex: groupIndex++,
       });
       continue;
     }
-    
+
     // Check if adding this file would exceed the limit
-    if (currentTokens + file.tokens > maxTokensPerGroup && currentGroup.length > 0) {
+    if (
+      currentTokens + file.tokens > maxTokensPerGroup &&
+      currentGroup.length > 0
+    ) {
       groups.push({
         files: [...currentGroup],
         totalTokens: currentTokens,
-        groupIndex: groupIndex++
+        groupIndex: groupIndex++,
       });
-      
+
       currentGroup = [file];
       currentTokens = file.tokens;
     } else {
@@ -2826,23 +3158,27 @@ function createFileGroupsAlgorithmic(files: FileTokenInfo[], maxTokensPerGroup: 
       currentTokens += file.tokens;
     }
   }
-  
+
   // Add the last group if it has files
   if (currentGroup.length > 0) {
     groups.push({
       files: [...currentGroup],
       totalTokens: currentTokens,
-      groupIndex: groupIndex
+      groupIndex: groupIndex,
     });
   }
-  
+
   return groups;
 }
 
 // Aggregate analysis results from multiple groups
-function aggregateAnalysisResults(groupResults: string[], question: string, analysisMode: string): string {
+function aggregateAnalysisResults(
+  groupResults: string[],
+  question: string,
+  analysisMode: string,
+): string {
   const timestamp = new Date().toISOString();
-  
+
   return `# Project Orchestrator - Comprehensive Analysis
 
 ## Analysis Overview
@@ -2859,13 +3195,17 @@ This analysis was conducted using the Project Orchestrator system, which intelli
 
 ## Detailed Analysis by Group
 
-${groupResults.map((result, index) => `
+${groupResults
+  .map(
+    (result, index) => `
 ### Group ${index + 1} Analysis
 
 ${result}
 
 ---
-`).join('\n')}
+`,
+  )
+  .join("\n")}
 
 ## Consolidated Insights
 
@@ -2895,16 +3235,16 @@ Based on the analysis of all ${groupResults.length} groups, here are the key fin
 (async () => {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info("Gemini MCP Server running on stdio", { 
+  logger.info("Gemini MCP Server running on stdio", {
     serverName: "gemini-mcp-server",
     version: "1.0.0",
     transport: "stdio",
-    logsDirectory: logsDir
+    logsDirectory: logsDir,
   });
 })().catch((error) => {
-  logger.error("Failed to start server:", { 
-    error: error.message, 
-    stack: error.stack 
+  logger.error("Failed to start server:", {
+    error: error.message,
+    stack: error.stack,
   });
   process.exit(1);
 });
@@ -2916,24 +3256,71 @@ async function calculateTokenUsageForProject(projectPath: string): Promise<{
 }> {
   let totalFiles = 0;
   let totalTokens = 0;
-  
+
   const scanDirectory = (dirPath: string) => {
     try {
       const items = readdirSync(dirPath);
-      
+
       for (const item of items) {
         const fullPath = path.join(dirPath, item);
         const stats = statSync(fullPath);
-        
+
         if (stats.isDirectory()) {
           // Skip common directories that shouldn't be analyzed
-          if (!['.git', 'node_modules', 'dist', 'build', '.next', 'target', 'venv', '__pycache__'].includes(item)) {
+          if (
+            ![
+              ".git",
+              "node_modules",
+              "dist",
+              "build",
+              ".next",
+              "target",
+              "venv",
+              "__pycache__",
+            ].includes(item)
+          ) {
             scanDirectory(fullPath);
           }
         } else if (stats.isFile()) {
           // Only count relevant file types
           const ext = path.extname(item).toLowerCase();
-          if (['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.cpp', '.c', '.h', '.cs', '.php', '.rb', '.go', '.rs', '.swift', '.kt', '.dart', '.html', '.css', '.scss', '.sass', '.less', '.vue', '.svelte', '.md', '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf'].includes(ext)) {
+          if (
+            [
+              ".js",
+              ".ts",
+              ".jsx",
+              ".tsx",
+              ".py",
+              ".java",
+              ".cpp",
+              ".c",
+              ".h",
+              ".cs",
+              ".php",
+              ".rb",
+              ".go",
+              ".rs",
+              ".swift",
+              ".kt",
+              ".dart",
+              ".html",
+              ".css",
+              ".scss",
+              ".sass",
+              ".less",
+              ".vue",
+              ".svelte",
+              ".md",
+              ".json",
+              ".xml",
+              ".yaml",
+              ".yml",
+              ".toml",
+              ".ini",
+              ".cfg",
+              ".conf",
+            ].includes(ext)
+          ) {
             totalFiles++;
             // Rough token estimation: 1 token ≈ 4 characters
             totalTokens += Math.ceil(stats.size / 4);
@@ -2944,8 +3331,8 @@ async function calculateTokenUsageForProject(projectPath: string): Promise<{
       // Skip directories that can't be read
     }
   };
-  
+
   scanDirectory(projectPath);
-  
+
   return { totalFiles, totalTokens };
 }

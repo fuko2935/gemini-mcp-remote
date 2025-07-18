@@ -1,15 +1,21 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { SetRepositoryInputSchema, setRepositoryLogic } from "./logic.js";
+import {
+  SetRepositoryInputSchema,
+  setRepositoryLogic,
+  SetRepositoryInput,
+} from "./logic.js";
 import { requestContextService } from "../../../utils/index.js";
 import { ErrorHandler } from "../../../utils/internal/errorHandler.js";
 
-export const registerSetRepositoryTool = async (server: McpServer): Promise<void> => {
+export const registerSetRepositoryTool = async (
+  server: McpServer,
+): Promise<void> => {
   server.tool(
     "set_repository",
     "🔗 Set Active Repository - Clone and setup GitHub repository for analysis",
-    zodToJsonSchema(SetRepositoryInputSchema).properties,
-    async (params) => {
+    SetRepositoryInputSchema.shape,
+    async (params: SetRepositoryInput) => {
       const context = requestContextService.createRequestContext({
         operation: "set_repository",
         toolName: "set_repository",
@@ -18,7 +24,7 @@ export const registerSetRepositoryTool = async (server: McpServer): Promise<void
 
       try {
         const result = await setRepositoryLogic(params, context);
-        
+
         return {
           content: [
             {
@@ -26,16 +32,16 @@ export const registerSetRepositoryTool = async (server: McpServer): Promise<void
               text: `# 🎉 Repository Başarıyla Ayarlandı!
 
 ## 📊 Proje Bilgileri
-- **Repository URL:** ${result.workspaceInfo.repoUrl}
-- **Yerel Yol:** ${result.workspaceInfo.localPath}
-- **Klonlanma Zamanı:** ${result.workspaceInfo.timestamp}
+- **Repository URL:** ${result.workspace.repoUrl}
+- **Yerel Yol:** ${result.workspace.localPath}
+- **Klonlanma Zamanı:** ${result.workspace.timestamp}
 
 ## 📈 Token Kullanımı Analizi
-- **Toplam Dosya Sayısı:** ${result.tokenUsage.totalFiles.toLocaleString()}
-- **Tahmini Token Sayısı:** ${result.tokenUsage.totalTokens.toLocaleString()}
+- **Toplam Dosya Sayısı:** ${result.usageAnalysis.tokenAnalysis.totalFiles.toLocaleString()}
+- **Tahmini Token Sayısı:** ${result.usageAnalysis.tokenAnalysis.totalTokens.toLocaleString()}
 
 ## 💡 Öneriler
-${result.tokenUsage.recommendation}
+${result.usageAnalysis.tokenAnalysis.recommendation}
 
 ## 🚀 Sonraki Adımlar
 1. **Küçük projeler için:** \`gemini_codebase_analyzer\` aracını kullanın
@@ -53,7 +59,7 @@ Repository artık tüm analizler için hazır! 🎯`,
           context,
           critical: true,
         });
-        
+
         return {
           content: [
             {
@@ -74,6 +80,6 @@ Repository artık tüm analizler için hazır! 🎯`,
           isError: true,
         };
       }
-    }
+    },
   );
 };

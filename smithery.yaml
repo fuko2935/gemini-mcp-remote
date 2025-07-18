@@ -8,12 +8,16 @@ startCommand:
       geminiApiKeys:
         type: string
         description: "Your Gemini API keys from Google AI Studio. You can enter multiple keys separated by commas for automatic rotation (e.g., 'key1,key2,key3'). Get yours at: https://makersuite.google.com/app/apikey"
+      githubToken:
+        type: string
+        description: "(Optional) Your GitHub Personal Access Token (PAT) for cloning private repositories. This will be available as GITHUB_TOKEN environment variable."
       logsPath:
         type: string
         description: "The absolute path inside the container for log files. Default: /app/logs"
         default: "/app/logs"
   exampleConfig:
     geminiApiKeys: "your-api-key-here,your-second-key,your-third-key"
+    githubToken: "ghp_YourPersonalAccessTokenHere"
     logsPath: "/app/logs"
   commandFunction: |-
     (config) => ({
@@ -21,6 +25,7 @@ startCommand:
       args: ['dist/simple-server.js'],
       env: {
         GEMINI_API_KEY: config.geminiApiKeys,
+        GITHUB_TOKEN: config.githubToken || '',
         LOGS_DIR: config.logsPath || '/app/logs'
       }
     })
