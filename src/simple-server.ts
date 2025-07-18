@@ -478,18 +478,19 @@ function generateApiKeyFields() {
       ),
   };
 
-  // Add numbered API key fields (geminiApiKey2 through geminiApiKey100)
-  for (let i = 2; i <= 100; i++) {
-    fields[`geminiApiKey${i}`] = z
+  return fields;
+}
+
+// Lazy loading friendly version - minimal API key fields for tool discovery
+function generateMinimalApiKeyFields() {
+  return {
+    geminiApiKeys: z
       .string()
-      .min(1)
       .optional()
       .describe(
-        `🔑 GEMINI API KEY ${i}: Optional additional API key for rate limit rotation`,
-      );
-  }
-
-  return fields;
+        "🔑 GEMINI API KEYS: Optional if set in environment variables. Multiple keys supported (comma-separated).",
+      ),
+  };
 }
 
 // API Key Status Checker Schema
@@ -688,6 +689,58 @@ const ProjectOrchestratorAnalyzeSchema = z.object({
   ...generateApiKeyFields(),
 });
 
+// Create minimal schemas for lazy loading (tool discovery)
+const MinimalUsageGuideSchema = z.object({
+  topic: z.string().optional().describe("Help topic to get information about"),
+});
+
+const MinimalApiKeyStatusSchema = z.object({
+  ...generateMinimalApiKeyFields(),
+});
+
+const MinimalGeminiCodebaseAnalyzerSchema = z.object({
+  question: z.string().describe("Your question about the codebase"),
+  ...generateMinimalApiKeyFields(),
+});
+
+const MinimalGeminiCodeSearchSchema = z.object({
+  searchQuery: z.string().describe("What to search for in the codebase"),
+  ...generateMinimalApiKeyFields(),
+});
+
+const MinimalReadLogFileSchema = z.object({
+  filename: z.string().optional().describe("Log filename to read"),
+});
+
+const MinimalDynamicExpertCreateSchema = z.object({
+  expertiseHint: z.string().optional().describe("Type of expert needed"),
+  ...generateMinimalApiKeyFields(),
+});
+
+const MinimalDynamicExpertAnalyzeSchema = z.object({
+  question: z.string().describe("Question to analyze"),
+  expertPrompt: z.string().describe("Expert prompt from create step"),
+  ...generateMinimalApiKeyFields(),
+});
+
+const MinimalProjectOrchestratorCreateSchema = z.object({
+  analysisMode: z.string().describe("Analysis mode for the project"),
+  ...generateMinimalApiKeyFields(),
+});
+
+const MinimalProjectOrchestratorAnalyzeSchema = z.object({
+  question: z.string().describe("Question to analyze"),
+  groupsData: z.string().describe("Groups data from create step"),
+  ...generateMinimalApiKeyFields(),
+});
+
+const MinimalSetRepositoryInputSchema = z.object({
+  repoUrl: z.string().url().describe("GitHub repository URL"),
+  githubToken: z.string().optional().describe("GitHub access token"),
+});
+
+const MinimalTokenCalculatorInputSchema = z.object({});
+
 // Create the server
 const server = new Server(
   {
@@ -703,7 +756,7 @@ const server = new Server(
   },
 );
 
-// List tools handler
+// List tools handler - using minimal schemas for lazy loading
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
@@ -711,66 +764,66 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         name: "get_usage_guide",
         description:
           "📖 GET USAGE GUIDE - **START HERE!** Learn how to use this MCP server effectively. Essential for understanding all capabilities, analysis modes, and workflows. Use this first if you're new to the server.",
-        inputSchema: zodToJsonSchema(UsageGuideSchema),
+        inputSchema: zodToJsonSchema(MinimalUsageGuideSchema),
       },
       {
         name: "check_api_key_status",
         description:
           "🔑 CHECK API KEY STATUS - Monitor your Gemini API keys configuration. Shows how many keys are configured, validates them, and provides rate limit protection status. Perfect for debugging API key issues.",
-        inputSchema: zodToJsonSchema(ApiKeyStatusSchema),
+        inputSchema: zodToJsonSchema(MinimalApiKeyStatusSchema),
       },
       {
         name: "gemini_dynamic_expert_create",
         description:
           "🎯 DYNAMIC EXPERT CREATE - **STEP 1 of 2** Generate a custom expert mode for your project! AI analyzes your codebase and creates a specialized expert persona. Use this first, then use the generated expert prompt with 'gemini_dynamic_expert_analyze'.",
-        inputSchema: zodToJsonSchema(DynamicExpertCreateSchema),
+        inputSchema: zodToJsonSchema(MinimalDynamicExpertCreateSchema),
       },
       {
         name: "gemini_dynamic_expert_analyze",
         description:
           "🎯 DYNAMIC EXPERT ANALYZE - **STEP 2 of 2** Use the custom expert created in step 1 to analyze your project! Provide the expert prompt from 'gemini_dynamic_expert_create' to get specialized analysis tailored to your specific project.",
-        inputSchema: zodToJsonSchema(DynamicExpertAnalyzeSchema),
+        inputSchema: zodToJsonSchema(MinimalDynamicExpertAnalyzeSchema),
       },
       {
         name: "gemini_codebase_analyzer",
         description:
           "🔍 COMPREHENSIVE CODEBASE ANALYSIS - Deep dive into entire project with expert analysis modes. Use for understanding architecture, getting explanations, code reviews, security audits, etc. 36 specialized analysis modes available.",
-        inputSchema: zodToJsonSchema(GeminiCodebaseAnalyzerSchema),
+        inputSchema: zodToJsonSchema(MinimalGeminiCodebaseAnalyzerSchema),
       },
       {
         name: "gemini_code_search",
         description:
           "⚡ FAST TARGETED SEARCH - Quickly find specific code patterns, functions, or features. Use when you know what you're looking for but need to locate it fast. Perfect for finding specific implementations.",
-        inputSchema: zodToJsonSchema(GeminiCodeSearchSchema),
+        inputSchema: zodToJsonSchema(MinimalGeminiCodeSearchSchema),
       },
       {
         name: "read_log_file",
         description:
           "📄 READ LOG FILE - Read the contents of a server log file ('activity.log' or 'error.log'). Useful for debugging the server itself, monitoring API key rotation, and troubleshooting issues.",
-        inputSchema: zodToJsonSchema(ReadLogFileSchema),
+        inputSchema: zodToJsonSchema(MinimalReadLogFileSchema),
       },
       {
         name: "project_orchestrator_create",
         description:
           "🎭 PROJECT ORCHESTRATOR CREATE - **STEP 1 of 2** Analyze massive projects and create intelligent file groups! Automatically handles projects over 1M tokens by grouping files efficiently. Use this first, then use 'project_orchestrator_analyze' with the groups data.",
-        inputSchema: zodToJsonSchema(ProjectOrchestratorCreateSchema),
+        inputSchema: zodToJsonSchema(MinimalProjectOrchestratorCreateSchema),
       },
       {
         name: "project_orchestrator_analyze",
         description:
           "🎭 PROJECT ORCHESTRATOR ANALYZE - **STEP 2 of 2** Analyze each file group and combine results! Use the groups data from 'project_orchestrator_create' to perform comprehensive analysis of massive codebases without timeout issues.",
-        inputSchema: zodToJsonSchema(ProjectOrchestratorAnalyzeSchema),
+        inputSchema: zodToJsonSchema(MinimalProjectOrchestratorAnalyzeSchema),
       },
       // YENİ EKLENECEK ARAÇ TANIMLARI
       {
         name: "set_repository",
         description: "Sets the active repository for analysis by cloning it from a given URL.",
-        inputSchema: zodToJsonSchema(SetRepositoryInputSchema),
+        inputSchema: zodToJsonSchema(MinimalSetRepositoryInputSchema),
       },
       {
         name: "token_calculator",
         description: "Calculates the estimated token count for a given text.",
-        inputSchema: zodToJsonSchema(TokenCalculatorInputSchema),
+        inputSchema: zodToJsonSchema(MinimalTokenCalculatorInputSchema),
       },
     ],
   };
