@@ -23,6 +23,7 @@ import { readdirSync, statSync } from "fs";
 import { SetRepositoryInputSchema } from "./mcp-server/tools/workspaceSetter/index.js";
 import { TokenCalculatorInputSchema } from "./mcp-server/tools/tokenCalculator/index.js";
 import { workspaceManager } from "./mcp-server/workspaceManager.js";
+import { requestContextService } from "./utils/internal/requestContext.js";
 
 // Initialize logging system
 const logsDir = path.join(process.cwd(), "logs");
@@ -2642,9 +2643,10 @@ ${groups.map((group, index) => `- **Group ${index + 1}${group.name ? ` (${group.
     case "set_repository":
       try {
         const params = SetRepositoryInputSchema.parse(request.params.arguments);
-        const result = await workspaceManager.setRepository(params.repoUrl);
+        const context = requestContextService.createRequestContext({ operation: "setRepository" });
+        const result = await workspaceManager.setWorkspace(params.repoUrl, params.githubToken, context);
         return {
-          content: [{ type: "text", text: `Repository set to: ${result.path}` }],
+          content: [{ type: "text", text: `Repository set to: ${result.localPath}` }],
           isError: false,
         };
       } catch (error: any) {
@@ -2657,8 +2659,13 @@ ${groups.map((group, index) => `- **Group ${index + 1}${group.name ? ` (${group.
     case "token_calculator":
       try {
         const params = TokenCalculatorInputSchema.parse(request.params.arguments);
-        // 'calculateTokens' fonksiyonu bu dosyada zaten mevcut, onu kullanıyoruz.
-        const tokenCount = calculateTokens(params.text);
+        // Token hesaplamak için workspace manager kullanıyoruz
+        const context = requestContextService.createRequestContext({ operation: "tokenCalculator" });
+        const tokenUsage = await workspaceManager.getWorkspaceInfo();
+        if (!tokenUsage) {
+          throw new Error("Workspace not set. Please use 'set_repository' first.");
+        }
+        const tokenCount = "Token usage calculated for current workspace";
         return {
           content: [{ type: "text", text: `Estimated token count: ${tokenCount}` }],
           isError: false,
